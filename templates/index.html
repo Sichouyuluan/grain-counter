@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Grain Detector</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--accent:#4ade80;--text:#e2e8f0;--dim:#94a3b8;--radius:12px}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+.header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.header h1{font-size:18px;font-weight:600}
+.header .badge{background:var(--accent);color:#000;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.conn-status{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:20px;background:var(--card);border:1px solid var(--border)}
+.conn-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.conn-dot.online{background:#4ade80;box-shadow:0 0 6px #4ade80}
+.conn-dot.offline{background:#f87171;box-shadow:0 0 6px #f87171}
+.conn-dot.checking{background:#facc15;box-shadow:0 0 6px #facc15;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.main{flex:1;padding:16px;display:flex;flex-direction:column;gap:16px;max-width:1200px;width:100%;margin:0 auto}
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:40px 20px;text-align:center;cursor:pointer;transition:all .2s}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:rgba(74,222,128,.05)}
+.upload-zone p{color:var(--dim);margin-top:8px;font-size:14px}
+.upload-zone .icon{font-size:48px}
+.btn{background:var(--accent);color:#000;border:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%;transition:opacity .2s}
+.btn:hover{opacity:.9}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.result-panel{display:none;gap:16px}
+.result-panel.show{display:flex;flex-direction:column}
+.stats{display:flex;gap:12px;flex-wrap:wrap}
+.stat-card{flex:1;min-width:100px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
+.stat-card .num{font-size:28px;font-weight:700;color:var(--accent)}
+.stat-card .label{font-size:12px;color:var(--dim);margin-top:4px}
+.result-img{text-align:center}
+.result-img img{width:100%;border-radius:8px;border:1px solid var(--border)}
+.result-img .label{font-size:12px;color:var(--dim);text-align:center;margin-top:4px}
+.loading{display:none;text-align:center;padding:40px}
+.loading.show{display:block}
+.spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.status-text{font-size:13px;color:var(--dim);margin-top:8px}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--text);padding:10px 20px;border-radius:8px;font-size:13px;z-index:400;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.3);display:none}
+.toast.error{border-color:#f87171;color:#f87171}
+.toast.success{border-color:var(--accent);color:var(--accent)}
+.key-bar{padding:12px 16px;background:var(--card);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+.key-bar input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px}
+.key-bar button{background:var(--accent);color:#000;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
+.key-bar .status{font-size:12px;color:var(--accent)}
+.key-bar.hidden{display:none}
+.offline-overlay{display:none;position:fixed;top:0;left:0;right:0;z-index:300;background:#f87171;color:#fff;text-align:center;padding:10px;font-size:14px;font-weight:600}
+.offline-overlay.show{display:block}
+@media(max-width:600px){
+  .stats{flex-direction:row}
+  .stats .stat-card{min-width:0;flex:1;padding:12px 8px}
+  .stats .stat-card .num{font-size:22px}
+  .stats .stat-card .label{font-size:11px}
+  .header h1{font-size:16px}
+  .main{padding:12px}
+  .upload-zone{padding:30px 16px}
+}
+@media(max-width:600px) and (orientation:landscape){
+  .main{padding:8px 12px}
+  .upload-zone{padding:16px}
+  .stats{flex-direction:row}
+}
+</style>
+</head>
+<body>
+<div class="offline-overlay" id="offlineOverlay">&#9888; 服务器连接已断开，正在尝试重连...</div>
+<div class="header">
+  <span style="font-size:24px">&#127806;</span>
+  <h1>小麦籽粒检测</h1>
+  <span class="badge">YOLOv8</span>
+  <div class="conn-status" id="connStatus">
+    <span class="conn-dot checking" id="connDot"></span>
+    <span id="connText">检测中...</span>
+  </div>
+</div>
+<div class="key-bar" id="keyBar">
+  <input type="password" id="keyInput" placeholder="输入 API Key">
+  <button onclick="saveKey()">连接</button>
+  <span class="status" id="keyStatus"></span>
+</div>
+<div class="main">
+  <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">&#128247;</div>
+    <p><b>点击上传</b> 或 拖拽图片到这里</p>
+    <p>支持 JPG/PNG/BMP，最大 10MB</p>
+    <p style="margin-top:6px;font-size:12px;color:var(--accent)">&#128161; 也可 Ctrl+V 粘贴图片</p>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" style="display:none">
+  <button class="btn" id="detectBtn" disabled onclick="detect()">开始检测</button>
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p id="loadingText">推理中...</p>
+    <div class="status-text" id="loadingDetail"></div>
+  </div>
+  <div class="result-panel" id="resultPanel">
+    <div class="stats">
+      <div class="stat-card"><div class="num" id="countNum">0</div><div class="label">籽粒数</div></div>
+      <div class="stat-card"><div class="num" id="timeNum">0</div><div class="label">耗时 (ms)</div></div>
+      <div class="stat-card"><div class="num" id="sizeNum">0</div><div class="label">图片尺寸</div></div>
+    </div>
+    <div class="result-img">
+      <img id="resultImg" src="">
+      <div class="label">检测结果</div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+let apiKey=localStorage.getItem('grain_api_key')||'';
+let selectedFile=null;
+let authDisabled=false;
+let serverOnline=false;
+let heartbeatTimer=null;
+const $=id=>document.getElementById(id);
+
+// ==================== 连接状态检测 ====================
+function setConnState(state,detail){
+  const dot=$('connDot');
+  const text=$('connText');
+  const overlay=$('offlineOverlay');
+  dot.className='conn-dot';
+  if(state==='online'){
+    dot.classList.add('online');
+    text.textContent='已连接';
+    text.style.color='#4ade80';
+    overlay.classList.remove('show');
+    serverOnline=true;
+  }else if(state==='offline'){
+    dot.classList.add('offline');
+    text.textContent='未连接';
+    text.style.color='#f87171';
+    overlay.classList.add('show');
+    serverOnline=false;
+  }else{
+    dot.classList.add('checking');
+    text.textContent=detail||'检测中...';
+    text.style.color='#facc15';
+  }
+}
+
+async function pingServer(){
+  try{
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),5000);
+    const r=await fetch('/api/ping',{signal:ctrl.signal});
+    clearTimeout(tid);
+    if(r.ok){
+      const d=await r.json();
+      if(d.auth===false)authDisabled=true;
+      setConnState('online');
+      return true;
+    }
+    setConnState('offline');
+    return false;
+  }catch(e){
+    setConnState('offline');
+    return false;
+  }
+}
+
+function startHeartbeat(){
+  pingServer();
+  heartbeatTimer=setInterval(pingServer,3000);
+}
+
+// ==================== Toast ====================
+function toast(msg,type){
+  const t=$('toast');
+  t.textContent=msg;
+  t.className='toast';
+  if(type==='error')t.classList.add('error');
+  else if(type==='success')t.classList.add('success');
+  t.style.display='block';
+  setTimeout(()=>t.style.display='none',3000);
+}
+
+// ==================== API Key ====================
+fetch('/api/health').then(r=>r.json()).then(d=>{
+  if(d.auth===false){authDisabled=true;$('keyBar').classList.add('hidden')}
+}).catch(()=>{});
+
+if(apiKey){$('keyInput').value='***';$('keyStatus').textContent='已连接';$('keyStatus').style.color='var(--accent)'}
+function saveKey(){
+  apiKey=$('keyInput').value.trim();
+  if(!apiKey){toast('请输入 API Key','error');return}
+  localStorage.setItem('grain_api_key',apiKey);
+  $('keyStatus').textContent='Key 已保存';
+  $('keyStatus').style.color='var(--accent)';
+  toast('Key 已保存','success');
+}
+
+// ==================== 文件选择 ====================
+$('fileInput').addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0])});
+const dz=$('dropZone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
+
+function handleFile(f){
+  if(!f.type.startsWith('image/')){toast('请上传图片文件','error');return}
+  if(f.size>10*1024*1024){toast('文件过大，最大 10MB','error');return}
+  selectedFile=f;
+  toast('已选择: '+f.name,'success');
+  $('detectBtn').disabled=false;
+}
+
+// ==================== 检测 ====================
+async function detect(){
+  if(!selectedFile){toast('请先选择图片','error');return}
+  if(!authDisabled&&!apiKey){toast('请先输入 API Key','error');return}
+  if(!serverOnline){toast('服务器未连接，请稍后重试','error');return}
+
+  $('detectBtn').disabled=true;
+  $('resultPanel').classList.remove('show');
+  $('loading').classList.add('show');
+  $('loadingText').textContent='正在上传...';
+  $('loadingDetail').textContent=selectedFile.name+' ('+formatSize(selectedFile.size)+')';
+
+  const fd=new FormData();
+  fd.append('file',selectedFile);
+  const headers={};
+  if(!authDisabled&&apiKey)headers['Authorization']='Bearer '+apiKey;
+
+  try{
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>{ctrl.abort();toast('上传超时，请检查网络','error')},30000);
+
+    $('loadingText').textContent='正在上传...';
+    const r=await fetch('/api/detect',{method:'POST',headers,body:fd,signal:ctrl.signal});
+    clearTimeout(tid);
+
+    if(!r.ok){
+      let errMsg='检测失败';
+      try{const e=await r.json();errMsg=e.detail||errMsg}catch(_){}
+      if(r.status===401)errMsg='API Key 无效，请检查';
+      else if(r.status===403)errMsg='API Key 错误';
+      else if(r.status===429)errMsg='请求过于频繁，请稍后再试';
+      throw new Error(errMsg);
+    }
+
+    $('loadingText').textContent='正在推理...';
+    $('loadingDetail').textContent='模型处理中，请稍候';
+
+    const d=await r.json();
+
+    $('countNum').textContent=d.count;
+    $('timeNum').textContent=d.elapsed_ms;
+    $('sizeNum').textContent=d.image_size.width+'\u00D7'+d.image_size.height;
+    $('resultImg').src=d.result_image;
+    $('resultPanel').classList.add('show');
+    toast('检测完成: '+d.count+' 粒','success');
+  }catch(e){
+    if(e.name==='AbortError'){
+      toast('请求超时，服务器可能未响应','error');
+    }else{
+      toast('错误: '+e.message,'error');
+    }
+  }finally{
+    $('loading').classList.remove('show');
+    $('detectBtn').disabled=false;
+  }
+}
+
+function formatSize(bytes){
+  if(bytes<1024)return bytes+'B';
+  if(bytes<1024*1024)return (bytes/1024).toFixed(1)+'KB';
+  return (bytes/(1024*1024)).toFixed(1)+'MB';
+}
+
+// ==================== 粘贴 ====================
+document.addEventListener('paste',e=>{
+  const items=e.clipboardData?.items;
+  if(!items)return;
+  for(const it of items){
+    if(it.type.startsWith('image/')){handleFile(it.getAsFile());break}
+  }
+});
+
+// ==================== 启动 ====================
+startHeartbeat();
+</script>
+</body>
+</html>
