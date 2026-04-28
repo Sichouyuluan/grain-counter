@@ -50,6 +50,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("grain_web")
 
+
+class _PinHidingFilter(logging.Filter):
+    """Hide API key fragments in uvicorn access logs."""
+    _PATTERNS = [
+        re.compile(r'(key=)[A-Za-z0-9_-]{8,}', re.IGNORECASE),
+        re.compile(r'(Bearer\s+)[A-Za-z0-9_-]{8,}', re.IGNORECASE),
+    ]
+
+    def filter(self, record):
+        msg = record.getMessage()
+        if "key" in msg.lower():
+            for pat in self._PATTERNS:
+                msg = pat.sub(r"\1***PIN***", msg)
+            record.msg = msg
+            record.args = ()
+        return True
+
+
+# Attach filter to uvicorn access logger
+for _name in ("uvicorn.access", "uvicorn"):
+    logging.getLogger(_name).addFilter(_PinHidingFilter())
+
 # ============================================================
 #  限速器
 # ============================================================
@@ -87,14 +109,16 @@ class GrainDetector:
         self.model = YOLO(abs_path)
         logger.info(f"模型加载完成, 耗时 {time.perf_counter()-t0:.2f}s")
 
-    def detect(self, img_bgr):
+    def detect(self, img_bgr, conf=None, iou=None):
         h, w = img_bgr.shape[:2]
-        logger.info(f"检测开始: img={w}x{h}")
+        score = conf if conf is not None else self.score_threshold
+        nms = iou if iou is not None else self.nms_threshold
+        logger.info(f"检测开始: img={w}x{h} conf={score} iou={nms}")
         t0 = time.perf_counter()
         results = self.model.predict(
             img_bgr,
-            conf=self.score_threshold,
-            iou=self.nms_threshold,
+            conf=score,
+            iou=nms,
             imgsz=self.input_size,
             verbose=False,
         )
@@ -149,7 +173,7 @@ async def lifespan(app: FastAPI):
     api_key = os.environ.get("GRAIN_API_KEY")
     if not api_key:
         api_key = secrets.token_urlsafe(32)
-    logger.info(f"API Key: {api_key[:8]}...{api_key[-4:]}")
+    logger.info(f"API Key: {api_key[:4]}...***PIN***")
     logger.info(f"服务启动: http://0.0.0.0:{CONFIG['port']}")
     yield
     logger.info("服务关闭")
@@ -218,8 +242,15 @@ async def get_api_key():
     return {"key": api_key}
 
 
+from fastapi import Query
+
 @app.post("/api/detect")
-async def detect_image(file: UploadFile = File(...), _: str = Depends(verify_api_key)):
+async def detect_image(
+    file: UploadFile = File(...),
+    conf: float = Query(default=None, ge=0.01, le=1.0, description="置信度阈值"),
+    iou: float = Query(default=None, ge=0.01, le=1.0, description="IoU阈值"),
+    _: str = Depends(verify_api_key),
+):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="请上传图片文件")
     content = await file.read()
@@ -231,7 +262,7 @@ async def detect_image(file: UploadFile = File(...), _: str = Depends(verify_api
     if img is None:
         raise HTTPException(status_code=400, detail="无法解析图片")
     t0 = time.perf_counter()
-    results = detector.detect(img)
+    results = detector.detect(img, conf=conf, iou=iou)
     elapsed = time.perf_counter() - t0
     vis = draw_results(img, results)
     _, buffer = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 90])

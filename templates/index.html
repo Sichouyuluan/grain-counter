@@ -63,6 +63,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   .upload-zone{padding:16px}
   .stats{flex-direction:row}
 }
+
+.slider-group{display:flex;gap:16px;flex-wrap:wrap}
+.slider-item{flex:1;min-width:200px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.slider-item .slider-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.slider-item .slider-label{font-size:13px;color:var(--dim)}
+.slider-item .slider-value{font-size:14px;font-weight:700;color:var(--accent);min-width:40px;text-align:right}
+.slider-item input[type=range]{width:100%;height:6px;-webkit-appearance:none;appearance:none;background:var(--border);border-radius:3px;outline:none;cursor:pointer}
+.slider-item input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 6px rgba(74,222,128,.4)}
+.slider-item input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--accent);cursor:pointer;border:none;box-shadow:0 0 6px rgba(74,222,128,.4)}
+details.adv-settings{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+details.adv-settings>summary{padding:12px 16px;cursor:pointer;font-size:13px;color:var(--dim);user-select:none;list-style:none;display:flex;align-items:center;gap:8px}
+details.adv-settings>summary::-webkit-details-marker{display:none}
+details.adv-settings>summary::before{content:"\25B8";font-size:12px;transition:transform .2s}
+details.adv-settings[open]>summary::before{transform:rotate(90deg)}
+details.adv-settings>summary:hover{color:var(--text)}
+details.adv-settings .slider-group{padding:0 16px 14px}
 </style>
 </head>
 <body>
@@ -105,6 +121,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       <img id="resultImg" src="">
       <div class="label">检测结果</div>
     </div>
+    <details class="adv-settings">
+      <summary>高级设置</summary>
+      <div class="slider-group">
+        <div class="slider-item">
+          <div class="slider-header">
+            <span class="slider-label">置信度阈值 (Confidence)</span>
+            <span class="slider-value" id="confValue">0.25</span>
+          </div>
+          <input type="range" id="confSlider" min="0.01" max="1.0" step="0.01" value="0.25" oninput="document.getElementById('confValue').textContent=this.value">
+        </div>
+        <div class="slider-item">
+          <div class="slider-header">
+            <span class="slider-label">IoU 阈值 (覆盖度)</span>
+            <span class="slider-value" id="iouValue">0.50</span>
+          </div>
+          <input type="range" id="iouSlider" min="0.01" max="1.0" step="0.01" value="0.50" oninput="document.getElementById('iouValue').textContent=this.value">
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -229,7 +264,7 @@ async function detect(){
     const tid=setTimeout(()=>{ctrl.abort();toast('上传超时，请检查网络','error')},30000);
 
     $('loadingText').textContent='正在上传...';
-    const r=await fetch('/api/detect',{method:'POST',headers,body:fd,signal:ctrl.signal});
+    const conf=document.getElementById('confSlider').value;const iou=document.getElementById('iouSlider').value;const r=await fetch('/api/detect?conf='+conf+'&iou='+iou,{method:'POST',headers,body:fd,signal:ctrl.signal});
     clearTimeout(tid);
 
     if(!r.ok){
