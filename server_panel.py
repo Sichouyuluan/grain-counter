@@ -2,6 +2,7 @@
 小麦籽粒检测 - 服务器管理面板
 - 一键启动/关闭 Web 服务器
 - 实时显示服务器状态
+- 在线设备下拉列表（HTTP 追踪）
 - 内嵌命令行日志输出
 - 地址栏带一键复制（本机 + 局域网）
 """
@@ -9,12 +10,14 @@
 import os
 import sys
 import time
+import json
 import subprocess
 import threading
 import socket
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 from datetime import datetime
+import urllib.request
 
 
 class ServerPanel:
@@ -36,9 +39,14 @@ class ServerPanel:
         self.tailscale_online = False
         self.device_count = 0
 
+        # 在线设备下拉相关
+        self._dropdown_open = False
+        self._dropdown_win = None
+        self._online_devices = []
+
         self._build_ui()
+        self._load_saved_key()
         self._detect_tailscale()
-        self._start_tailscale_loop()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ============================================================
@@ -65,6 +73,92 @@ class ServerPanel:
             self.root.clipboard_append(url)
             self._log(f"已复制: {url}", "SUCCESS")
             self._show_toast("✅ 已复制到剪贴板")
+
+    def _open_url(self, url_var):
+        url = url_var.get()
+        if url and not url.startswith("http://--"):
+            import webbrowser
+            webbrowser.open(url)
+            self._log(f"已打开: {url}", "SUCCESS")
+        else:
+            self._show_toast("⚠️ 地址无效")
+
+    def _copy_custom_key(self):
+        key = self.custom_key_var.get().strip()
+        if key:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(key)
+            self._log(f"已复制 Key: {key[:4]}...", "SUCCESS")
+            self._show_toast("✅ Key 已复制到剪贴板")
+        else:
+            self._show_toast("⚠️ Key 为空")
+
+    def _on_port_changed(self, *_args):
+        new_val = self.port_var.get()
+        if new_val != self._prev_port:
+            self._log(f"端口修改: {self._prev_port} → {new_val}", "INFO")
+            self._prev_port = new_val
+
+    def _on_auth_changed(self, *_args):
+        new_val = self.auth_var.get()
+        if new_val != self._prev_auth:
+            label = "开启" if new_val else "关闭"
+            self._log(f"API 认证: {label}", "INFO")
+            self._prev_auth = new_val
+            if self.server_running:
+                self._toggle_auth_on_server(new_val)
+
+    def _on_hide_pin_changed(self, *_args):
+        new_val = self.hide_pin_var.get()
+        if new_val != self._prev_hide_pin:
+            label = "开启" if new_val else "关闭"
+            self._log(f"隐藏 PIN: {label}", "INFO")
+            self._prev_hide_pin = new_val
+
+    def _on_key_changed(self):
+        new_val = self.custom_key_var.get().strip()
+        if new_val != self._prev_key:
+            if new_val:
+                self._log(f"API Key 已修改: {new_val[:4]}...", "INFO")
+            else:
+                self._log("API Key 已清空", "INFO")
+            self._prev_key = new_val
+
+    def _toggle_auth_on_server(self, enable):
+        """热切换服务器的 API 认证，无需重启"""
+        port = self.port_var.get().strip()
+        def do_toggle():
+            try:
+                url = f"http://localhost:{port}/api/toggle-auth"
+                req = urllib.request.Request(url, data=b"{}", method="POST",
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    result = json.loads(resp.read().decode())
+                    if result.get("ok"):
+                        state = "开启" if result.get("auth") else "关闭"
+                        self.root.after(0, lambda: self._log(f"服务器 API 认证已{state}（热切换，无需重启）", "SUCCESS"))
+                    else:
+                        self.root.after(0, lambda: self._log("热切换失败", "ERROR"))
+            except Exception as e:
+                self.root.after(0, lambda: self._log(f"热切换异常: {e}", "ERROR"))
+        threading.Thread(target=do_toggle, daemon=True).start()
+
+    def _load_saved_key(self):
+        """启动时读取 .api_key 文件，预填到输入框；没有则自动生成"""
+        import secrets as _secrets
+        try:
+            key_file = os.path.join(self.project_dir, ".api_key")
+            saved = ""
+            if os.path.exists(key_file):
+                with open(key_file, "r") as f:
+                    saved = f.read().strip()
+            if not saved:
+                saved = _secrets.token_urlsafe(32)
+                with open(key_file, "w") as f:
+                    f.write(saved)
+            self.custom_key_var.set(saved)
+        except Exception:
+            pass
 
     def _show_toast(self, msg):
         toast = tk.Toplevel(self.root)
@@ -103,18 +197,28 @@ class ServerPanel:
         self.status_label.pack(side=tk.LEFT, padx=(5, 0))
         tk.Label(status_frame, text="  |  ", bg="#2b2b2b", fg="#555",
                  font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+
+        # ---- 设备数量 + 下拉按钮 ----
         self.device_count_label = tk.Label(status_frame, text="📡 0台设备", bg="#2b2b2b", fg="#aaa",
                                            font=("Microsoft YaHei", 10))
-        self.device_count_label.pack(side=tk.LEFT, padx=(0, 5))
+        self.device_count_label.pack(side=tk.LEFT, padx=(0, 2))
+        self.device_dropdown_btn = tk.Button(
+            status_frame, text="▼", bg="#2b2b2b", fg="#aaa",
+            font=("Consolas", 9, "bold"), relief="flat",
+            activebackground="#3a3a3a", activeforeground="#fff",
+            bd=0, padx=4, pady=0, cursor="hand2",
+            command=self._toggle_dropdown
+        )
+        self.device_dropdown_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        # ---- 地址栏（始终可见，启动后填入真实地址） ----
+        # ---- 地址栏 ----
         addr_outer = tk.Frame(self.root, bg="#2b2b2b")
         addr_outer.pack(fill=tk.X, padx=10, pady=(5, 5))
 
         # ---- API Key 显示栏 ----
         self.key_frame = tk.Frame(self.root, bg="#2b2b2b")
         self.key_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        self.key_frame.pack_forget()  # 默认隐藏，启动后显示
+        self.key_frame.pack_forget()
 
         row_key = tk.Frame(self.key_frame, bg="#2b2b2b")
         row_key.pack(fill=tk.X)
@@ -147,6 +251,9 @@ class ServerPanel:
         tk.Button(row_local, text="📋 复制", command=lambda: self._copy_url(self.local_url_var),
                   bg="#555", fg="#fff", font=("Microsoft YaHei", 9),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT)
+        tk.Button(row_local, text="🔗 打开", command=lambda: self._open_url(self.local_url_var),
+                  bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
+                  relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=(5,0))
 
         # 局域网地址行
         row_lan = tk.Frame(addr_outer, bg="#2b2b2b")
@@ -165,6 +272,9 @@ class ServerPanel:
         tk.Button(row_lan, text="📋 复制", command=lambda: self._copy_url(self.lan_url_var),
                   bg="#555", fg="#fff", font=("Microsoft YaHei", 9),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT)
+        tk.Button(row_lan, text="🔗 打开", command=lambda: self._open_url(self.lan_url_var),
+                  bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
+                  relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=(5,0))
 
         # Tailscale 穿墙地址行
         row_ts = tk.Frame(addr_outer, bg="#2b2b2b")
@@ -183,6 +293,9 @@ class ServerPanel:
         tk.Button(row_ts, text="📋 复制", command=lambda: self._copy_url(self.ts_url_var),
                   bg="#555", fg="#fff", font=("Microsoft YaHei", 9),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(row_ts, text="🔗 打开", command=lambda: self._open_url(self.ts_url_var),
+                  bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
+                  relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=(5,0))
         tk.Button(row_ts, text="🔗 管理后台", command=self._open_tailscale_admin,
                   bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT)
@@ -239,9 +352,30 @@ class ServerPanel:
                        selectcolor="#4CAF50", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
         tk.Label(row1, text="隐藏PIN:", bg="#2b2b2b", fg="#ddd",
                  font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(15, 0))
-        self.hide_pin_var = tk.BooleanVar(value=False)
+        self.hide_pin_var = tk.BooleanVar(value=True)
         tk.Checkbutton(row1, variable=self.hide_pin_var, bg="#2b2b2b", fg="#fff",
                        selectcolor="#FF9800", font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=5)
+
+        # API Key 输入框
+        tk.Label(row1, text="Key:", bg="#2b2b2b", fg="#ddd",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(15, 0))
+        self.custom_key_var = tk.StringVar(value="")
+        self.key_input = tk.Entry(row1, textvariable=self.custom_key_var, width=16, bg="#404040", fg="#0f0",
+                                  insertbackground="#fff", font=("Consolas", 9))
+        self.key_input.pack(side=tk.LEFT, padx=(5, 3))
+        tk.Button(row1, text="📋", command=lambda: self._copy_custom_key(),
+                  bg="#555", fg="#fff", font=("Microsoft YaHei", 8),
+                  relief="flat", padx=4, pady=1, cursor="hand2").pack(side=tk.LEFT)
+
+        # ---- 配置变更追踪 ----
+        self._prev_port = self.port_var.get()
+        self._prev_auth = self.auth_var.get()
+        self._prev_hide_pin = self.hide_pin_var.get()
+        self._prev_key = self.custom_key_var.get()
+        self.port_var.trace_add("write", self._on_port_changed)
+        self.auth_var.trace_add("write", self._on_auth_changed)
+        self.hide_pin_var.trace_add("write", self._on_hide_pin_changed)
+        self.key_input.bind("<FocusOut>", lambda e: self._on_key_changed())
 
         # ---- 日志输出区 ----
         log_frame = tk.LabelFrame(self.root, text=" 📋 服务器日志 ", bg="#2b2b2b", fg="#aaa",
@@ -262,7 +396,6 @@ class ServerPanel:
     def _log(self, msg, level="INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"[{timestamp}] [{level}] {msg}\n"
-        # 隐藏PIN: 过滤包含key的敏感日志
         display_line = line
         if self.hide_pin_var.get():
             lower_msg = msg.lower()
@@ -272,14 +405,186 @@ class ServerPanel:
         self.log_text.insert(tk.END, display_line, level)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
-        # 写入本地日志文件 (同样隐藏PIN)
         try:
             log_path = os.path.join(self.project_dir, "server_panel.log")
-            file_line = display_line
             with open(log_path, "a", encoding="utf-8") as f:
-                f.write(file_line)
+                f.write(display_line)
         except Exception:
             pass
+
+    # ============================================================
+    #  在线设备下拉列表
+    # ============================================================
+    def _toggle_dropdown(self):
+        if self._dropdown_open:
+            self._close_dropdown()
+        else:
+            self._show_dropdown()
+
+    def _show_dropdown(self):
+        if self._dropdown_open:
+            return
+        self._dropdown_open = True
+        self.device_dropdown_btn.config(text="▲")
+
+        # 创建下拉窗口
+        self._dropdown_win = tk.Toplevel(self.root)
+        self._dropdown_win.overrideredirect(True)
+        self._dropdown_win.configure(bg="#333")
+
+        # 计算位置：在设备数量按钮下方
+        btn_x = self.device_dropdown_btn.winfo_rootx()
+        btn_y = self.device_dropdown_btn.winfo_rooty() + self.device_dropdown_btn.winfo_height()
+        self._dropdown_win.geometry(f"420x200+{btn_x}+{btn_y}")
+
+        # 内容框架
+        inner = tk.Frame(self._dropdown_win, bg="#333", padx=8, pady=8)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        if not self.server_running:
+            tk.Label(inner, text="服务器未运行", bg="#333", fg="#888",
+                     font=("Microsoft YaHei", 10)).pack(pady=20)
+        elif not self._online_devices:
+            tk.Label(inner, text="暂无设备连接", bg="#333", fg="#888",
+                     font=("Microsoft YaHei", 10)).pack(pady=20)
+        else:
+            for dev in self._online_devices:
+                self._add_device_row(inner, dev)
+
+        # 点击外部关闭
+        self._dropdown_win.bind("<FocusOut>", lambda e: self._close_dropdown())
+        self._dropdown_win.focus_set()
+
+        # 3秒后自动刷新
+        if self.server_running:
+            self._dropdown_win.after(3000, self._refresh_dropdown)
+
+    def _add_device_row(self, parent, dev):
+        """添加一个设备行"""
+        row = tk.Frame(parent, bg="#3a3a3a", padx=8, pady=6)
+        row.pack(fill=tk.X, pady=(0, 4))
+
+        # 左侧：设备信息
+        left = tk.Frame(row, bg="#3a3a3a")
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # 第一行：名称 + 状态
+        name_text = dev.get("display_name", "未知设备")
+        if dev.get("kicked"):
+            name_text += " [已踢出]"
+        tk.Label(left, text=f"🟢 {name_text}", bg="#3a3a3a", fg="#fff",
+                 font=("Microsoft YaHei", 9, "bold"), anchor="w").pack(fill=tk.X)
+
+        # 第二行：IP + 连接时长 + 检测次数
+        conn_secs = dev.get("connected_seconds", 0)
+        hours = conn_secs // 3600
+        mins = (conn_secs % 3600) // 60
+        if hours > 0:
+            conn_str = f"{hours}小时{mins}分"
+        else:
+            conn_str = f"{mins}分钟"
+
+        info_text = f"    {dev.get('ip', '?')}  ·  连接 {conn_str}  ·  检测 {dev.get('detect_count', 0)}次"
+        tk.Label(left, text=info_text, bg="#3a3a3a", fg="#aaa",
+                 font=("Consolas", 8), anchor="w").pack(fill=tk.X)
+
+        # 右侧：断开按钮
+        kick_btn = tk.Button(
+            row, text="断开", bg="#f44336", fg="#fff",
+            font=("Microsoft YaHei", 8, "bold"),
+            relief="flat", padx=8, pady=2, cursor="hand2",
+            activebackground="#d32f2f",
+            command=lambda ip=dev.get("ip"): self._kick_device(ip)
+        )
+        kick_btn.pack(side=tk.RIGHT, padx=(5, 0))
+
+    def _kick_device(self, ip):
+        """踢出设备"""
+        if not self.server_running:
+            return
+        port = self.port_var.get().strip()
+        def do_kick():
+            try:
+                url = f"http://localhost:{port}/api/kick-device"
+                data = json.dumps({"ip": ip}).encode("utf-8")
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    result = json.loads(resp.read().decode())
+                    if result.get("ok"):
+                        self.root.after(0, lambda: self._log(f"已踢出设备: {ip}", "WARNING"))
+                        self.root.after(0, self._refresh_online_devices)
+                    else:
+                        self.root.after(0, lambda: self._log(f"踢出失败: {result}", "ERROR"))
+            except Exception as e:
+                self.root.after(0, lambda: self._log(f"踢出异常: {e}", "ERROR"))
+        threading.Thread(target=do_kick, daemon=True).start()
+
+    def _close_dropdown(self):
+        self._dropdown_open = False
+        self.device_dropdown_btn.config(text="▼")
+        if self._dropdown_win:
+            try:
+                self._dropdown_win.destroy()
+            except Exception:
+                pass
+            self._dropdown_win = None
+
+    def _refresh_dropdown(self):
+        """刷新下拉列表内容"""
+        if not self._dropdown_open or not self._dropdown_win:
+            return
+        self._refresh_online_devices()
+        # 重建下拉内容
+        try:
+            for w in self._dropdown_win.winfo_children():
+                w.destroy()
+        except Exception:
+            return
+
+        inner = tk.Frame(self._dropdown_win, bg="#333", padx=8, pady=8)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        if not self._online_devices:
+            tk.Label(inner, text="暂无设备连接", bg="#333", fg="#888",
+                     font=("Microsoft YaHei", 10)).pack(pady=20)
+        else:
+            for dev in self._online_devices:
+                self._add_device_row(inner, dev)
+
+        # 继续刷新
+        if self._dropdown_open:
+            self._dropdown_win.after(3000, self._refresh_dropdown)
+
+    def _refresh_online_devices(self):
+        """从服务器获取在线设备列表"""
+        if not self.server_running:
+            self._online_devices = []
+            self._update_device_count(0)
+            return
+        port = self.port_var.get().strip()
+        def fetch():
+            try:
+                url = f"http://localhost:{port}/api/online-devices"
+                with urllib.request.urlopen(url, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+                    devices = data.get("devices", [])
+                    count = data.get("count", len(devices))
+                    self._online_devices = devices
+                    self.root.after(0, lambda: self._update_device_count(count))
+            except Exception:
+                self._online_devices = []
+                self.root.after(0, lambda: self._update_device_count(0))
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _update_device_count(self, count):
+        """更新设备数量显示"""
+        self.device_count = count
+        self.device_count_label.config(text=f"📡 {count}台设备")
+
+    def _start_device_loop(self):
+        """定时轮询在线设备"""
+        self._refresh_online_devices()
+        self.root.after(3000, self._start_device_loop)
 
     # ============================================================
     #  启动服务器
@@ -299,6 +604,9 @@ class ServerPanel:
         cmd = [sys.executable, self.web_server_path, "--port", port]
         if not auth:
             cmd.append("--no-auth")
+        custom_key = self.custom_key_var.get().strip()
+        if custom_key:
+            cmd.extend(["--api-key", custom_key])
 
         self._log(f"启动命令: {' '.join(cmd)}", "INFO")
 
@@ -326,6 +634,9 @@ class ServerPanel:
             self.log_thread = threading.Thread(target=self._read_log, daemon=True)
             self.log_thread.start()
 
+            # 启动在线设备轮询
+            self.root.after(3000, self._start_device_loop)
+
         except Exception as e:
             self._log(f"启动失败: {e}", "ERROR")
             messagebox.showerror("启动失败", str(e))
@@ -335,6 +646,8 @@ class ServerPanel:
             for line in self.server_process.stdout:
                 line = line.rstrip()
                 if not line:
+                    continue
+                if "/api/ping" in line:
                     continue
                 if "WARNING" in line or "warn" in line.lower():
                     self.root.after(0, self._log, line, "WARNING")
@@ -371,11 +684,13 @@ class ServerPanel:
         finally:
             self.server_running = False
             self.server_process = None
+            self._online_devices = []
             self._update_ui_state(False)
 
     def _on_server_stopped(self):
         self.server_running = False
         self.server_process = None
+        self._online_devices = []
         self._update_ui_state(False)
         self._log("服务器进程已退出", "WARNING")
 
@@ -402,10 +717,8 @@ class ServerPanel:
             local_ip = self._get_local_ip()
             self.local_url_var.set(f"http://localhost:{port}")
             self.lan_url_var.set(f"http://{local_ip}:{port}")
-            # 更新 Tailscale 地址中的端口
             if self.tailscale_ip:
                 self.ts_url_var.set(f"http://{self.tailscale_ip}:{port}")
-            # 启动后获取 API Key
             self._fetch_api_key(port)
         else:
             self.status_dot.config(fg="#f44336")
@@ -418,7 +731,7 @@ class ServerPanel:
             self.local_url_var.set("http://-- 未启动 --")
             self.lan_url_var.set("http://-- 未启动 --")
             self.key_frame.pack_forget()
-            # 更新 Tailscale 地址中的端口
+            self._update_device_count(0)
             if self.tailscale_ip:
                 port_off = self.port_var.get().strip()
                 self.ts_url_var.set(f"http://{self.tailscale_ip}:{port_off}")
@@ -427,11 +740,8 @@ class ServerPanel:
     #  Tailscale 穿墙检测
     # ============================================================
     def _detect_tailscale(self):
-        """检测 Tailscale 安装和连接状态"""
         def detect():
-            import subprocess
             try:
-                # 检查 tailscale 是否安装
                 result = subprocess.run(
                     ["tailscale", "status"],
                     capture_output=True, text=True, timeout=5,
@@ -440,33 +750,26 @@ class ServerPanel:
                 if result.returncode != 0:
                     self.root.after(0, lambda: self._set_tailscale_state(False, None, "未安装"))
                     return
-
-                # 获取 Tailscale IP
                 ip_result = subprocess.run(
                     ["tailscale", "ip", "-4"],
                     capture_output=True, text=True, timeout=5,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 )
                 ts_ip = ip_result.stdout.strip() if ip_result.returncode == 0 else None
-
                 if ts_ip:
                     self.root.after(0, lambda: self._set_tailscale_state(True, ts_ip, "已连接"))
                 else:
                     self.root.after(0, lambda: self._set_tailscale_state(False, None, "未连接"))
-
             except FileNotFoundError:
                 self.root.after(0, lambda: self._set_tailscale_state(False, None, "未安装"))
-            except Exception as e:
-                self.root.after(0, lambda: self._set_tailscale_state(False, None, f"检测失败"))
-
+            except Exception:
+                self.root.after(0, lambda: self._set_tailscale_state(False, None, "检测失败"))
         threading.Thread(target=detect, daemon=True).start()
 
     def _set_tailscale_state(self, connected, ip, status_text):
-        """更新 Tailscale 状态显示"""
         self.tailscale_online = connected
         self.tailscale_ip = ip
         port = self.port_var.get().strip()
-
         if connected and ip:
             self.ts_status_dot.config(fg="#4CAF50")
             self.ts_url_var.set(f"http://{ip}:{port}")
@@ -480,13 +783,11 @@ class ServerPanel:
                 self._log(f"Tailscale {status_text}", "WARNING")
 
     def _open_tailscale_admin(self):
-        """打开 Tailscale 管理后台"""
         import webbrowser
         webbrowser.open("https://login.tailscale.com/admin/machines")
         self._log("已打开 Tailscale 管理后台", "INFO")
 
     def _start_tailscale(self):
-        """启动 Tailscale 穿墙"""
         def run():
             try:
                 self.root.after(0, lambda: self._log("正在启动 Tailscale...", "INFO"))
@@ -497,7 +798,7 @@ class ServerPanel:
                 )
                 if result.returncode == 0:
                     self.root.after(0, lambda: self._log("Tailscale 启动成功", "SUCCESS"))
-                    self._refresh_tailscale()
+                    self._detect_tailscale()
                 else:
                     err = result.stderr.strip() or result.stdout.strip() or "未知错误"
                     self.root.after(0, lambda: self._log(f"Tailscale 启动失败: {err}", "ERROR"))
@@ -506,7 +807,6 @@ class ServerPanel:
         threading.Thread(target=run, daemon=True).start()
 
     def _stop_tailscale(self):
-        """停止 Tailscale 穿墙"""
         def run():
             try:
                 self.root.after(0, lambda: self._log("正在停止 Tailscale...", "WARNING"))
@@ -520,90 +820,28 @@ class ServerPanel:
                 else:
                     err = result.stderr.strip() or result.stdout.strip() or "未知错误"
                     self.root.after(0, lambda: self._log(f"Tailscale 停止失败: {err}", "ERROR"))
-                self._refresh_tailscale()
+                self._detect_tailscale()
             except Exception as e:
                 self.root.after(0, lambda: self._log(f"Tailscale 停止异常: {e}", "ERROR"))
         threading.Thread(target=run, daemon=True).start()
 
-    def _refresh_tailscale(self):
-        """刷新 Tailscale 状态（单次）"""
-        def detect():
-            try:
-                result = subprocess.run(
-                    ["tailscale", "status"],
-                    capture_output=True, text=True, timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                )
-                if result.returncode != 0:
-                    self.root.after(0, lambda: self._set_tailscale_state(False, None, "未连接"))
-                    self.root.after(0, lambda: self._update_device_count(0))
-                    return
-                ip_result = subprocess.run(
-                    ["tailscale", "ip", "-4"],
-                    capture_output=True, text=True, timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                )
-                ts_ip = ip_result.stdout.strip() if ip_result.returncode == 0 else None
-                # 统计在线设备数 (排除自身行和空行/表头)
-                online_count = 0
-                for line in result.stdout.splitlines():
-                    stripped = line.strip()
-                    if not stripped or stripped.startswith("#") or stripped.startswith("Hostname"):
-                        continue
-                    parts = stripped.split()
-                    if len(parts) >= 2:
-                        # tailscale status 格式: name  ...  active/online/offline
-                        # 也兼容: 有 IP 地址(100.x.x.x) 的行算一台设备
-                        status_field = parts[-1] if len(parts) > 3 else parts[1]
-                        has_ip = any(p.startswith("100.") for p in parts)
-                        if status_field in ("active", "online") or has_ip:
-                            online_count += 1
-                self.root.after(0, lambda: self._update_device_count(online_count))
-                if ts_ip:
-                    self.root.after(0, lambda: self._set_tailscale_state(True, ts_ip, "已连接"))
-                else:
-                    self.root.after(0, lambda: self._set_tailscale_state(False, None, "未连接"))
-            except FileNotFoundError:
-                self.root.after(0, lambda: self._set_tailscale_state(False, None, "未安装"))
-                self.root.after(0, lambda: self._update_device_count(0))
-            except Exception:
-                self.root.after(0, lambda: self._set_tailscale_state(False, None, "检测失败"))
-                self.root.after(0, lambda: self._update_device_count(0))
-        threading.Thread(target=detect, daemon=True).start()
-
-    def _update_device_count(self, count):
-        """更新设备数量显示"""
-        self.device_count = count
-        self.device_count_label.config(text=f"📡 {count}台设备")
-
-    def _start_tailscale_loop(self):
-        """定时轮询 Tailscale 状态和设备数量"""
-        self._refresh_tailscale()
-        self.root.after(300000, self._start_tailscale_loop)
-
     def _fetch_api_key(self, port):
-        """启动后获取服务器生成的 API Key"""
-        import urllib.request
-        import json
         def fetch():
             try:
-                time.sleep(1.5)  # 等服务器启动完成
-                # 先检查认证是否开启
+                time.sleep(1.5)
                 health_url = f"http://localhost:{port}/api/health"
                 with urllib.request.urlopen(health_url, timeout=3) as resp:
                     health = json.loads(resp.read().decode())
                     if not health.get("auth", True):
-                        # 认证关闭，隐藏 Key 栏
                         self.root.after(0, lambda: self.key_frame.pack_forget())
                         return
-                # 认证开启，获取 Key
                 key_url = f"http://localhost:{port}/api/key"
                 with urllib.request.urlopen(key_url, timeout=3) as resp:
                     data = json.loads(resp.read().decode())
                     key = data.get("key", "--")
                     self.root.after(0, lambda: self.key_var.set(key))
                     self.root.after(0, lambda: self.key_frame.pack(fill=tk.X, padx=10, pady=(0, 5)))
-            except Exception as e:
+            except Exception:
                 self.root.after(0, lambda: self.key_var.set("获取失败"))
         threading.Thread(target=fetch, daemon=True).start()
 
@@ -620,6 +858,7 @@ class ServerPanel:
     #  关闭
     # ============================================================
     def _on_close(self):
+        self._close_dropdown()
         if self.server_running:
             if messagebox.askyesno("确认退出", "服务器正在运行，关闭面板将同时停止服务器。\n确定退出？"):
                 self._stop_server()
@@ -628,7 +867,6 @@ class ServerPanel:
             self.root.destroy()
 
     def run(self):
-        # 写入启动分隔线到日志文件
         try:
             log_path = os.path.join(self.project_dir, "server_panel.log")
             with open(log_path, "a", encoding="utf-8") as f:
