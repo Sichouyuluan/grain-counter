@@ -112,7 +112,7 @@ class ServerPanel:
         new_val = self.hide_pin_var.get()
         if new_val != self._prev_hide_pin:
             label = "开启" if new_val else "关闭"
-            self._log(f"隐藏 PIN: {label}", "INFO")
+            self._log(f"日志隐藏模式: {label}", "INFO")
             self._prev_hide_pin = new_val
 
     def _on_key_changed(self):
@@ -395,20 +395,19 @@ class ServerPanel:
     # ============================================================
     def _log(self, msg, level="INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"[{timestamp}] [{level}] {msg}\n"
-        display_line = line
-        if self.hide_pin_var.get():
-            lower_msg = msg.lower()
-            if "key" in lower_msg:
-                display_line = f"[{timestamp}] [{level}] ***PIN已隐藏***\n"
+        if self.hide_pin_var.get() and "key" in msg.lower():
+            return
+        if "/api/online-devices" in msg or "/api/ping" in msg or "/api/health" in msg:
+            return
+        line = "[" + timestamp + "] [" + level + "] " + msg + chr(10)
         self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, display_line, level)
+        self.log_text.insert(tk.END, line, level)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
         try:
             log_path = os.path.join(self.project_dir, "server_panel.log")
             with open(log_path, "a", encoding="utf-8") as f:
-                f.write(display_line)
+                f.write(line)
         except Exception:
             pass
 
