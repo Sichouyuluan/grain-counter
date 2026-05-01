@@ -17,6 +17,7 @@ import logging
 import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -38,6 +39,13 @@ CONFIG = {
     "max_upload_mb": 10,
     "rate_limit_per_minute": 60,
     "require_api_key": True,
+    # 优质训练照片筛选配置
+    "valuable_dir": "Valuable photos",
+    "valuable_enable": True,
+    "valuable_low_threshold": 0.5,       # 低置信度阈值
+    "valuable_very_low_threshold": 0.3,  # 极低置信度阈值
+    "valuable_low_ratio": 0.20,          # 条件A：低置信度占比 >= 20%
+    "valuable_very_low_ratio": 0.08,     # 条件B：极低置信度占比 >= 8%
 }
 
 # ============================================================
@@ -331,21 +339,102 @@ def draw_results(img_bgr, results):
     return vis
 
 
+
+# ============================================================
+#  优质训练照片筛选器
+# ============================================================
+class ValuablePhotoSaver:
+    """检测完成后分析置信度分布，自动保存低置信度图片到优质训练照片目录"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._saved_count = 0
+        self._project_dir = os.path.dirname(os.path.abspath(__file__))
+        self._valuable_dir = os.path.join(self._project_dir, CONFIG["valuable_dir"])
+        os.makedirs(self._valuable_dir, exist_ok=True)
+        logger.info(f"优质训练照片目录: {self._valuable_dir}")
+
+    @property
+    def saved_count(self):
+        with self._lock:
+            return self._saved_count
+
+    def reset_count(self):
+        with self._lock:
+            self._saved_count = 0
+
+    def check_and_save(self, img_bgr, detections, filename="image.jpg"):
+        """分析检测结果，如果满足筛选条件则保存原图"""
+        if not CONFIG.get("valuable_enable", True):
+            return False
+
+        n = len(detections)
+        if n == 0:
+            return False
+
+        confs = [d["confidence"] for d in detections]
+        very_low_threshold = CONFIG["valuable_very_low_threshold"]
+        low_threshold = CONFIG["valuable_low_threshold"]
+        very_low_ratio_threshold = CONFIG["valuable_very_low_ratio"]
+        low_ratio_threshold = CONFIG["valuable_low_ratio"]
+
+        very_low_count = sum(1 for c in confs if c < very_low_threshold)
+        low_count = sum(1 for c in confs if very_low_threshold <= c < low_threshold)
+
+        very_low_ratio = very_low_count / n
+        low_ratio = (very_low_count + low_count) / n
+
+        # 判断是否触发筛选条件
+        triggered = False
+        reason = ""
+        if low_ratio >= low_ratio_threshold:
+            triggered = True
+            reason = f"低置信度占比 {low_ratio:.1%} >= {low_ratio_threshold:.0%}"
+        if very_low_ratio >= very_low_ratio_threshold:
+            triggered = True
+            reason = f"极低置信度占比 {very_low_ratio:.1%} >= {very_low_ratio_threshold:.0%}"
+
+        if not triggered:
+            logger.info(
+                f"筛选跳过: {filename} | {n}框, 极低{very_low_count}({very_low_ratio:.1%}), 低{low_count}({low_ratio:.1%})"
+            )
+            return False
+
+        # 保存原图
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = os.path.splitext(filename)[0]
+            save_name = f"{base_name}_{timestamp}.jpg"
+            save_path = os.path.join(self._valuable_dir, save_name)
+            cv2.imwrite(save_path, img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            with self._lock:
+                self._saved_count += 1
+            logger.info(
+                f"[VALUABLE] saved: {save_name} | reason: {reason} | {n}框, 极低{very_low_count}({very_low_ratio:.1%}), 低{low_count}({low_ratio:.1%})"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"保存优质照片失败: {e}")
+            return False
+
+
 # ============================================================
 #  全局状态
 # ============================================================
 detector = None
 api_key = None
+valuable_saver = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global detector, api_key
+    global detector, api_key, valuable_saver
     detector = GrainDetector(
         model_path=CONFIG["model_path"],
         input_size=CONFIG["input_size"],
         score_threshold=CONFIG["score_threshold"],
         nms_threshold=CONFIG["nms_threshold"],
     )
+    valuable_saver = ValuablePhotoSaver()
     api_key = os.environ.get("GRAIN_API_KEY")
     if not api_key:
         key_file = os.path.join(os.path.dirname(__file__), ".api_key")
@@ -491,6 +580,10 @@ async def detect_image(
     t0 = time.perf_counter()
     results = detector.detect(img, conf=conf, iou=iou)
     elapsed = time.perf_counter() - t0
+
+    # 优质训练照片筛选
+    saved_valuable = valuable_saver.check_and_save(img, results, filename=file.filename or "image.jpg")
+
     vis = draw_results(img, results)
     _, buffer = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 90])
     vis_b64 = base64.b64encode(buffer).decode("utf-8")
@@ -500,7 +593,51 @@ async def detect_image(
         "detections": results,
         "result_image": f"data:image/jpeg;base64,{vis_b64}",
         "image_size": {"width": img.shape[1], "height": img.shape[0]},
+        "valuable_saved": saved_valuable,
+        "valuable_count": valuable_saver.saved_count,
     }
+
+
+
+@app.get("/api/valuable-stats")
+async def valuable_stats():
+    """获取优质训练照片统计信息"""
+    vdir = os.path.abspath(CONFIG["valuable_dir"])
+    count = 0
+    if os.path.exists(vdir):
+        count = len([f for f in os.listdir(vdir) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    return {
+        "saved_count": valuable_saver.saved_count,
+        "total_count": count,
+        "dir": CONFIG["valuable_dir"],
+        "enable": CONFIG.get("valuable_enable", True),
+    }
+
+
+@app.post("/api/valuable-toggle")
+async def valuable_toggle():
+    """开启/关闭优质照片筛选"""
+    CONFIG["valuable_enable"] = not CONFIG.get("valuable_enable", True)
+    state = "开启" if CONFIG["valuable_enable"] else "关闭"
+    logger.info(f"优质照片筛选已{state}")
+    return {"ok": True, "enable": CONFIG["valuable_enable"]}
+
+
+@app.post("/api/valuable-reset")
+async def valuable_reset():
+    """重置本次会话保存计数"""
+    valuable_saver.reset_count()
+    return {"ok": True, "saved_count": 0}
+
+
+@app.post("/api/valuable-open-dir")
+async def valuable_open_dir():
+    """打开优质照片文件夹"""
+    vdir = os.path.abspath(CONFIG["valuable_dir"])
+    if os.path.exists(vdir):
+        os.startfile(vdir)
+        return {"ok": True, "dir": vdir}
+    return {"ok": False, "error": "目录不存在"}
 
 
 if __name__ == "__main__":

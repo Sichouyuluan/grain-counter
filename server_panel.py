@@ -43,6 +43,7 @@ class ServerPanel:
         self._dropdown_open = False
         self._dropdown_win = None
         self._online_devices = []
+        self.valuable_count = 0
 
         self._build_ui()
         self._load_saved_key()
@@ -222,17 +223,22 @@ class ServerPanel:
 
         row_key = tk.Frame(self.key_frame, bg="#2b2b2b")
         row_key.pack(fill=tk.X)
-        tk.Label(row_key, text="🔑 Key:", bg="#2b2b2b", fg="#aaa",
+
+        # key 相关元素（Auth ON 时显示）
+        self.key_row = tk.Frame(row_key, bg="#2b2b2b")
+        self.key_row.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(self.key_row, text="🔑 Key:", bg="#2b2b2b", fg="#aaa",
                  font=("Microsoft YaHei", 9), width=8, anchor="w").pack(side=tk.LEFT)
         self.key_var = tk.StringVar(value="--")
-        self.key_entry = tk.Entry(row_key, textvariable=self.key_var,
+        self.key_entry = tk.Entry(self.key_row, textvariable=self.key_var,
                                   bg="#404040", fg="#0f0", font=("Consolas", 10),
                                   insertbackground="#fff", state="readonly", readonlybackground="#404040")
         self.key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.key_copy_btn = tk.Button(row_key, text="📋 复制", command=lambda: self._copy_url(self.key_var),
+        self.key_copy_btn = tk.Button(self.key_row, text="📋 复制", command=lambda: self._copy_url(self.key_var),
                                       bg="#555", fg="#fff", font=("Microsoft YaHei", 9),
                                       relief="flat", padx=10, pady=2, cursor="hand2")
         self.key_copy_btn.pack(side=tk.LEFT)
+
 
         # 本机地址行
         row_local = tk.Frame(addr_outer, bg="#2b2b2b")
@@ -254,6 +260,7 @@ class ServerPanel:
         tk.Button(row_local, text="🔗 打开", command=lambda: self._open_url(self.local_url_var),
                   bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side=tk.LEFT, padx=(5,0))
+
 
         # 局域网地址行
         row_lan = tk.Frame(addr_outer, bg="#2b2b2b")
@@ -366,6 +373,17 @@ class ServerPanel:
         tk.Button(row1, text="📋", command=lambda: self._copy_custom_key(),
                   bg="#555", fg="#fff", font=("Microsoft YaHei", 8),
                   relief="flat", padx=4, pady=1, cursor="hand2").pack(side=tk.LEFT)
+
+        # 优质训练照片计数 + 打开文件夹按钮
+        tk.Label(row1, text="  📸 已保存:", bg="#2b2b2b", fg="#aaa",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(12, 0))
+        self.valuable_count_label = tk.Label(row1, text="0张", bg="#2b2b2b", fg="#4CAF50",
+                                             font=("Microsoft YaHei", 9, "bold"))
+        self.valuable_count_label.pack(side=tk.LEFT, padx=(2, 0))
+        self.valuable_open_btn = tk.Button(row1, text="📂 打开", command=self._open_valuable_dir,
+                                           bg="#6C63FF", fg="#fff", font=("Microsoft YaHei", 9),
+                                           relief="flat", padx=8, pady=2, cursor="hand2")
+        self.valuable_open_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # ---- 配置变更追踪 ----
         self._prev_port = self.port_var.get()
@@ -635,6 +653,8 @@ class ServerPanel:
 
             # 启动在线设备轮询
             self.root.after(3000, self._start_device_loop)
+            # 启动优质照片统计轮询
+            self.root.after(5000, self._poll_valuable_stats)
 
         except Exception as e:
             self._log(f"启动失败: {e}", "ERROR")
@@ -843,6 +863,42 @@ class ServerPanel:
             except Exception:
                 self.root.after(0, lambda: self.key_var.set("获取失败"))
         threading.Thread(target=fetch, daemon=True).start()
+
+    # ============================================================
+    #  优质训练照片
+    # ============================================================
+    def _open_valuable_dir(self):
+        """打开优质训练照片文件夹（本地直接打开，不依赖服务器）"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        valuable_dir = os.path.join(script_dir, "Valuable photos")
+        os.makedirs(valuable_dir, exist_ok=True)
+        os.startfile(valuable_dir)
+        self._log(f"已打开优质照片目录: {valuable_dir}", "SUCCESS")
+
+    def _poll_valuable_stats(self):
+        """定时获取优质训练照片统计"""
+        if not self.server_running:
+            self.root.after(5000, self._poll_valuable_stats)
+            return
+        port = self.port_var.get().strip()
+
+        def fetch():
+            try:
+                url = f"http://localhost:{port}/api/valuable-stats"
+                with urllib.request.urlopen(url, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+                    total = data.get("total_count", 0)
+                    self.root.after(0, lambda: self._update_valuable_count(total))
+            except Exception:
+                pass
+            self.root.after(5000, self._poll_valuable_stats)
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _update_valuable_count(self, count):
+        """更新优质照片计数显示"""
+        self.valuable_count = count
+        self.valuable_count_label.config(text=f"{count}张")
 
     # ============================================================
     #  定时检查进程状态
