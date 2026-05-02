@@ -399,10 +399,20 @@ class ServerPanel:
         log_frame = tk.LabelFrame(self.root, text=" 📋 服务器日志 ", bg="#2b2b2b", fg="#aaa",
                                   font=("Microsoft YaHei", 10), padx=5, pady=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(5, 10))
-        self.log_text = scrolledtext.ScrolledText(log_frame, bg="#1e1e1e", fg="#00ff00",
-                                                  font=("Consolas", 9), wrap=tk.WORD,
-                                                  insertbackground="#00ff00", state=tk.DISABLED)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        log_inner = tk.Frame(log_frame, bg="#1e1e1e")
+        log_inner.pack(fill=tk.BOTH, expand=True)
+        self.log_text = tk.Text(log_inner, bg="#1e1e1e", fg="#00ff00",
+                                font=("Consolas", 9), wrap=tk.WORD,
+                                insertbackground="#00ff00", state=tk.DISABLED,
+                                relief="flat", bd=0, highlightthickness=0)
+        log_scrollbar = tk.Scrollbar(log_inner, orient=tk.VERTICAL,
+                                     command=self.log_text.yview,
+                                     bg="#3a3a3a", troughcolor="#2b2b2b",
+                                     activebackground="#555", highlightthickness=0,
+                                     bd=0, width=10)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.log_text.tag_config("INFO", foreground="#00ff00")
         self.log_text.tag_config("WARNING", foreground="#FFA500")
         self.log_text.tag_config("ERROR", foreground="#f44336")
