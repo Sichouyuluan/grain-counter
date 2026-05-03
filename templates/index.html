@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Grain Detector</title>
+<title>Grain Detector - Low Bandwidth</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--accent:#4ade80;--text:#e2e8f0;--dim:#94a3b8;--radius:12px}
@@ -63,7 +63,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   .upload-zone{padding:16px}
   .stats{flex-direction:row}
 }
-
 .slider-group{display:flex;gap:16px;flex-wrap:wrap}
 .slider-item{flex:1;min-width:200px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
 .slider-item .slider-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
@@ -79,6 +78,14 @@ details.adv-settings>summary::before{content:"\25B8";font-size:12px;transition:t
 details.adv-settings[open]>summary::before{transform:rotate(90deg)}
 details.adv-settings>summary:hover{color:var(--text)}
 details.adv-settings .slider-group{padding:0 16px 14px}
+.progress-container{margin:12px 0;display:none}
+.progress-container.show{display:block}
+.progress-bar{width:100%;height:8px;background:var(--border);border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .3s;width:0%}
+.progress-text{font-size:12px;color:var(--dim);margin-top:4px;text-align:center}
+.progress-text .speed{color:var(--accent);font-weight:600}
+.retry-btn{background:#f87171;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;margin-top:12px;display:none}
+.retry-btn.show{display:inline-block}
 </style>
 </head>
 <body>
@@ -106,6 +113,14 @@ details.adv-settings .slider-group{padding:0 16px 14px}
   </div>
   <input type="file" id="fileInput" accept="image/*" style="display:none">
   <button class="btn" id="detectBtn" disabled onclick="detect()">开始检测</button>
+  <div class="progress-container" id="uploadProgress">
+    <div class="progress-bar"><div class="progress-fill" id="uploadFill"></div></div>
+    <div class="progress-text" id="uploadText">上传中: 0%</div>
+  </div>
+  <div class="progress-container" id="downloadProgress">
+    <div class="progress-bar"><div class="progress-fill" id="downloadFill"></div></div>
+    <div class="progress-text" id="downloadText">下载中: 0%</div>
+  </div>
   <div class="loading" id="loading">
     <div class="spinner"></div>
     <p id="loadingText">推理中...</p>
@@ -121,9 +136,9 @@ details.adv-settings .slider-group{padding:0 16px 14px}
       <img id="resultImg" src="">
       <div class="label">检测结果</div>
     </div>
-
   </div>
-    <details class="adv-settings" style="margin-top:12px">
+  <button class="retry-btn" id="retryBtn" onclick="retryDetect()">重试检测</button>
+  <details class="adv-settings" style="margin-top:12px">
     <summary>高级设置</summary>
     <div class="slider-group">
       <div class="slider-item">
@@ -145,177 +160,195 @@ details.adv-settings .slider-group{padding:0 16px 14px}
 </div>
 <div class="toast" id="toast"></div>
 <script>
-let apiKey=localStorage.getItem('grain_api_key')||'';
-let selectedFile=null;
-let authDisabled=false;
-let serverOnline=false;
-let heartbeatTimer=null;
-const $=id=>document.getElementById(id);
+var apiKey=localStorage.getItem('grain_api_key')||'';
+var selectedFile=null;
+var authDisabled=false;
+var serverOnline=false;
+var heartbeatTimer=null;
+var retryCount=0;
+var MAX_RETRIES=3;
+function $(id){return document.getElementById(id)}
 
-// ==================== 连接状态检测 ====================
+/* ========== 图片压缩 ========== */
+function compressImage(file,maxWidth,quality){
+  maxWidth=maxWidth||1920;
+  quality=quality||0.85;
+  return new Promise(function(resolve){
+    if(file.size<500*1024){resolve(file);return}
+    var reader=new FileReader();
+    reader.onload=function(e){
+      var img=new Image();
+      img.onload=function(){
+        var canvas=document.createElement('canvas');
+        var w=img.width,h=img.height;
+        if(w>maxWidth){h=h*maxWidth/w;w=maxWidth}
+        canvas.width=w;canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        canvas.toBlob(function(blob){
+          if(blob.size>=file.size){resolve(file)}
+          else{resolve(new File([blob],file.name,{type:'image/jpeg',lastModified:Date.now()}))}
+        },'image/jpeg',quality);
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ========== 连接状态 ========== */
 function setConnState(state,detail){
-  const dot=$('connDot');
-  const text=$('connText');
-  const overlay=$('offlineOverlay');
+  var dot=$('connDot'),text=$('connText'),overlay=$('offlineOverlay');
   dot.className='conn-dot';
-  if(state==='online'){
-    dot.classList.add('online');
-    text.textContent='已连接';
-    text.style.color='#4ade80';
-    overlay.classList.remove('show');
-    serverOnline=true;
-  }else if(state==='offline'){
-    dot.classList.add('offline');
-    text.textContent='未连接';
-    text.style.color='#f87171';
-    overlay.classList.add('show');
-    serverOnline=false;
-  }else{
-    dot.classList.add('checking');
-    text.textContent=detail||'检测中...';
-    text.style.color='#facc15';
-  }
+  if(state==='online'){dot.classList.add('online');text.textContent='已连接';text.style.color='#4ade80';overlay.classList.remove('show');serverOnline=true}
+  else if(state==='offline'){dot.classList.add('offline');text.textContent='未连接';text.style.color='#f87171';overlay.classList.add('show');serverOnline=false}
+  else{dot.classList.add('checking');text.textContent=detail||'检测中...';text.style.color='#facc15'}
 }
 
-async function pingServer(){
-  try{
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),5000);
-    const r=await fetch('/api/ping',{signal:ctrl.signal});
-    clearTimeout(tid);
-    if(r.ok){
-      const d=await r.json();
-      if(d.auth===false)authDisabled=true;
-      setConnState('online');
-      return true;
-    }
-    setConnState('offline');
-    return false;
-  }catch(e){
-    setConnState('offline');
-    return false;
-  }
+function pingServer(){
+  return new Promise(function(resolve){
+    var ctrl=new AbortController();
+    var tid=setTimeout(function(){ctrl.abort()},5000);
+    fetch('/api/ping',{signal:ctrl.signal}).then(function(r){
+      clearTimeout(tid);
+      if(r.ok){return r.json().then(function(d){if(d.auth===false)authDisabled=true;setConnState('online');resolve(true)})}
+      setConnState('offline');resolve(false);
+    }).catch(function(){clearTimeout(tid);setConnState('offline');resolve(false)});
+  });
 }
 
-function startHeartbeat(){
-  pingServer();
-  heartbeatTimer=setInterval(pingServer,5000);
-}
+function startHeartbeat(){pingServer();heartbeatTimer=setInterval(pingServer,5000)}
 
-// ==================== Toast ====================
+/* ========== Toast ========== */
 function toast(msg,type){
-  const t=$('toast');
-  t.textContent=msg;
-  t.className='toast';
-  if(type==='error')t.classList.add('error');
-  else if(type==='success')t.classList.add('success');
-  t.style.display='block';
-  setTimeout(()=>t.style.display='none',3000);
+  var t=$('toast');t.textContent=msg;t.className='toast';
+  if(type==='error')t.classList.add('error');else if(type==='success')t.classList.add('success');
+  t.style.display='block';setTimeout(function(){t.style.display='none'},3000);
 }
 
-// ==================== API Key ====================
-fetch('/api/health').then(r=>r.json()).then(d=>{
+/* ========== API Key ========== */
+fetch('/api/health').then(function(r){return r.json()}).then(function(d){
   if(d.auth===false){authDisabled=true;$('keyBar').classList.add('hidden')}
-}).catch(()=>{});
-
+}).catch(function(){});
 if(apiKey){$('keyInput').value='***';$('keyStatus').textContent='已连接';$('keyStatus').style.color='var(--accent)'}
 function saveKey(){
   apiKey=$('keyInput').value.trim();
   if(!apiKey){toast('请输入 API Key','error');return}
   localStorage.setItem('grain_api_key',apiKey);
-  $('keyStatus').textContent='Key 已保存';
-  $('keyStatus').style.color='var(--accent)';
+  $('keyStatus').textContent='Key 已保存';$('keyStatus').style.color='var(--accent)';
   toast('Key 已保存','success');
 }
 
-// ==================== 文件选择 ====================
-$('fileInput').addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0])});
-const dz=$('dropZone');
-dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
-dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
-dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
+/* ========== 文件选择 ========== */
+$('fileInput').addEventListener('change',function(e){if(e.target.files[0])handleFile(e.target.files[0])});
+var dz=$('dropZone');
+dz.addEventListener('dragover',function(e){e.preventDefault();dz.classList.add('drag')});
+dz.addEventListener('dragleave',function(){dz.classList.remove('drag')});
+dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
 
 function handleFile(f){
   if(!f.type.startsWith('image/')){toast('请上传图片文件','error');return}
   if(f.size>10*1024*1024){toast('文件过大，最大 10MB','error');return}
-  selectedFile=f;
-  toast('已选择: '+f.name,'success');
-  $('detectBtn').disabled=false;
+  selectedFile=f;toast('已选择: '+f.name,'success');$('detectBtn').disabled=false;
 }
 
-// ==================== 检测 ====================
-async function detect(){
+/* ========== 进度条 ========== */
+function showUploadProgress(show){$('uploadProgress').classList.toggle('show',show);if(!show){$('uploadFill').style.width='0%';$('uploadText').textContent='上传中: 0%'}}
+function updateUploadProgress(pct,speed){$('uploadFill').style.width=pct+'%';var t='上传中: '+pct+'%';if(speed)t+=' <span class="speed">'+speed+'</span>';$('uploadText').innerHTML=t}
+function showDownloadProgress(show){$('downloadProgress').classList.toggle('show',show);if(!show){$('downloadFill').style.width='0%';$('downloadText').textContent='下载中: 0%'}}
+function updateDownloadProgress(pct,speed){$('downloadFill').style.width=pct+'%';var t='下载中: '+pct+'%';if(speed)t+=' <span class="speed">'+speed+'</span>';$('downloadText').innerHTML=t}
+
+function formatSize(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB'}
+function formatSpeed(bps){if(bps<1024)return bps.toFixed(0)+'B/s';if(bps<1048576)return(bps/1024).toFixed(1)+'KB/s';return(bps/1048576).toFixed(1)+'MB/s'}
+
+/* ========== 检测 ========== */
+function detect(){
   if(!selectedFile){toast('请先选择图片','error');return}
   if(!authDisabled&&!apiKey){toast('请先输入 API Key','error');return}
   if(!serverOnline){toast('服务器未连接，请稍后重试','error');return}
 
-  $('detectBtn').disabled=true;
-  $('resultPanel').classList.remove('show');
-  $('loading').classList.add('show');
-  $('loadingText').textContent='正在上传...';
+  $('detectBtn').disabled=true;$('retryBtn').classList.remove('show');
+  $('resultPanel').classList.remove('show');$('loading').classList.add('show');
+  $('loadingText').textContent='正在压缩图片...';
   $('loadingDetail').textContent=selectedFile.name+' ('+formatSize(selectedFile.size)+')';
 
-  const fd=new FormData();
-  fd.append('file',selectedFile);
-  const headers={};
-  if(!authDisabled&&apiKey)headers['Authorization']='Bearer '+apiKey;
-
-  try{
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>{ctrl.abort();toast('上传超时，请检查网络','error')},30000);
-
+  compressImage(selectedFile).then(function(compressedFile){
     $('loadingText').textContent='正在上传...';
-    const conf=document.getElementById('confSlider').value;const iou=document.getElementById('iouSlider').value;const r=await fetch('/api/detect?conf='+conf+'&iou='+iou,{method:'POST',headers,body:fd,signal:ctrl.signal});
-    clearTimeout(tid);
-
-    if(!r.ok){
-      let errMsg='检测失败';
-      try{const e=await r.json();errMsg=e.detail||errMsg}catch(_){}
-      if(r.status===401)errMsg='API Key 无效，请检查';
-      else if(r.status===403)errMsg='API Key 错误';
-      else if(r.status===429)errMsg='请求过于频繁，请稍后再试';
-      throw new Error(errMsg);
-    }
-
-    $('loadingText').textContent='正在推理...';
+    $('loadingDetail').textContent='压缩后: '+formatSize(compressedFile.size)+' (原始: '+formatSize(selectedFile.size)+')';
+    return uploadWithProgress(compressedFile);
+  }).then(function(result){
+    $('loadingText').textContent='正在加载结果...';
     $('loadingDetail').textContent='模型处理中，请稍候';
-
-    const d=await r.json();
-
-    $('countNum').textContent=d.count;
-    $('timeNum').textContent=d.elapsed_ms;
-    $('sizeNum').textContent=d.image_size.width+'\u00D7'+d.image_size.height;
-    $('resultImg').src=d.result_image;
+    $('countNum').textContent=result.count;
+    $('timeNum').textContent=result.elapsed_ms;
+    $('sizeNum').textContent=result.image_size.width+'\u00D7'+result.image_size.height;
+    $('resultImg').src=result.result_image;
     $('resultPanel').classList.add('show');
-    toast('检测完成: '+d.count+' 粒','success');
-  }catch(e){
-    if(e.name==='AbortError'){
-      toast('请求超时，服务器可能未响应','error');
-    }else{
-      toast('错误: '+e.message,'error');
-    }
-  }finally{
-    $('loading').classList.remove('show');
-    $('detectBtn').disabled=false;
-  }
+    toast('检测完成: '+result.count+' 粒','success');
+    retryCount=0;
+  }).catch(function(e){
+    console.error('检测失败:',e);
+    if(retryCount<MAX_RETRIES){toast('检测失败，'+(MAX_RETRIES-retryCount)+' 次重试机会，点击重试按钮','error');$('retryBtn').classList.add('show')}
+    else{toast('检测失败，已达最大重试次数','error')}
+  }).finally(function(){
+    $('loading').classList.remove('show');$('detectBtn').disabled=false;
+    showUploadProgress(false);showDownloadProgress(false);
+  });
 }
 
-function formatSize(bytes){
-  if(bytes<1024)return bytes+'B';
-  if(bytes<1024*1024)return (bytes/1024).toFixed(1)+'KB';
-  return (bytes/(1024*1024)).toFixed(1)+'MB';
+function retryDetect(){retryCount++;detect()}
+
+/* ========== 上传 with 进度(XHR) ========== */
+function uploadWithProgress(file){
+  return new Promise(function(resolve,reject){
+    var xhr=new XMLHttpRequest();
+    var fd=new FormData();fd.append('file',file);
+    var conf=document.getElementById('confSlider').value;
+    var iou=document.getElementById('iouSlider').value;
+    xhr.open('POST','/api/detect?conf='+conf+'&iou='+iou);
+    if(!authDisabled&&apiKey)xhr.setRequestHeader('Authorization','Bearer '+apiKey);
+
+    var t0=Date.now();
+    xhr.upload.onprogress=function(e){
+      if(e.lengthComputable){
+        var pct=Math.round(e.loaded/e.total*100);
+        var spd=(Date.now()-t0)>0?formatSpeed(e.loaded/((Date.now()-t0)/1000)):'';
+        updateUploadProgress(pct,spd);
+      }
+    };
+    xhr.onprogress=function(e){
+      if(e.lengthComputable){
+        var pct=Math.round(e.loaded/e.total*100);
+        var spd=(Date.now()-t0)>0?formatSpeed(e.loaded/((Date.now()-t0)/1000)):'';
+        updateDownloadProgress(pct,spd);
+      }
+    };
+    xhr.onload=function(){
+      if(xhr.status>=200&&xhr.status<300){
+        try{resolve(JSON.parse(xhr.responseText))}catch(ex){reject(new Error('解析响应失败'))}
+      }else{
+        var errMsg='检测失败';
+        try{var ej=JSON.parse(xhr.responseText);errMsg=ej.detail||errMsg}catch(_){}
+        if(xhr.status===401)errMsg='API Key 无效，请检查';
+        else if(xhr.status===403)errMsg='API Key 错误';
+        else if(xhr.status===429)errMsg='请求过于频繁，请稍后再试';
+        reject(new Error(errMsg));
+      }
+    };
+    xhr.onerror=function(){reject(new Error('网络错误，请检查连接'))};
+    xhr.ontimeout=function(){reject(new Error('请求超时，请检查网络'))};
+    xhr.timeout=240000;
+    showUploadProgress(true);showDownloadProgress(true);
+    xhr.send(fd);
+  });
 }
 
-// ==================== 粘贴 ====================
-document.addEventListener('paste',e=>{
-  const items=e.clipboardData?.items;
-  if(!items)return;
-  for(const it of items){
-    if(it.type.startsWith('image/')){handleFile(it.getAsFile());break}
-  }
+/* ========== 粘贴 ========== */
+document.addEventListener('paste',function(e){
+  var items=e.clipboardData&&e.clipboardData.items;if(!items)return;
+  for(var i=0;i<items.length;i++){if(items[i].type.startsWith('image/')){handleFile(items[i].getAsFile());break}}
 });
 
-// ==================== 启动 ====================
+/* ========== 启动 ========== */
 startHeartbeat();
 </script>
 </body>

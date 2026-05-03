@@ -24,6 +24,7 @@ import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Header, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
 
 # ============================================================
@@ -46,6 +47,11 @@ CONFIG = {
     "valuable_very_low_threshold": 0.3,  # 极低置信度阈值
     "valuable_low_ratio": 0.20,          # 条件A：低置信度占比 >= 20%
     "valuable_very_low_ratio": 0.08,     # 条件B：极低置信度占比 >= 8%
+    # 低带宽优化配置
+    "response_compress_min_size": 1000,  # 响应压缩最小字节数
+    "upload_timeout_seconds": 120,       # 上传超时时间(秒)
+    "inference_timeout_seconds": 300,    # 推理超时时间(秒)
+    "enable_response_compression": True, # 启用响应压缩
 }
 
 # ============================================================
@@ -453,6 +459,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="小麦籽粒检测", version="1.0.0", lifespan=lifespan)
 
+# 添加 GZip 压缩中间件（低带宽优化）
+if CONFIG.get("enable_response_compression", True):
+    app.add_middleware(GZipMiddleware, minimum_size=CONFIG["response_compress_min_size"])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -658,4 +668,5 @@ if __name__ == "__main__":
     print(f"Model: {model}")
     auth = "ON" if CONFIG["require_api_key"] else "OFF"
     print(f"Auth: {auth}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    print(f"Response Compression: {'ON' if CONFIG.get('enable_response_compression') else 'OFF'}")
+    uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=120)
