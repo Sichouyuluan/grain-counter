@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+venv/
+.env.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Project specific
+node_modules/
+
+# Model files (large)
+# models/*.onnx is tracked via git-lfs in production

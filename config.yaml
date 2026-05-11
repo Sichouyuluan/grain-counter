@@ -1,0 +1,19 @@
+input_size: 640
+model_path: models/grain_v8m_v10.onnx
+nms_threshold: 0.5
+score_threshold: 0.25
+host: 0.0.0.0
+port: 8000
+max_upload_mb: 10
+rate_limit_per_minute: 60
+require_api_key: true
+valuable_dir: Valuable photos
+valuable_enable: true
+valuable_low_threshold: 0.5
+valuable_very_low_threshold: 0.3
+valuable_low_ratio: 0.20
+valuable_very_low_ratio: 0.08
+response_compress_min_size: 1000
+upload_timeout_seconds: 120
+inference_timeout_seconds: 300
+enable_response_compression: true

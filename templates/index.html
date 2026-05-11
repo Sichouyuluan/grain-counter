@@ -3,163 +3,204 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Grain Detector - Low Bandwidth</title>
+<title>🌾 小麦籽粒检测 - Grain Detector</title>
+<script src="https://cdn.tailwindcss.com">
+</script>
+<script>
+tailwind.config={theme:{extend:{colors:{surf:{DEFAULT:'#0f1117',card:'#1a1d27',border:'#2a2d3a'},accent:{DEFAULT:'#4ade80',dark:'#22c55e'},danger:'#f87171',warn:'#facc15'}}}};
+</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--accent:#4ade80;--text:#e2e8f0;--dim:#94a3b8;--radius:12px}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
-.header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
-.header h1{font-size:18px;font-weight:600}
-.header .badge{background:var(--accent);color:#000;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
-.conn-status{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:20px;background:var(--card);border:1px solid var(--border)}
-.conn-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.conn-dot.online{background:#4ade80;box-shadow:0 0 6px #4ade80}
-.conn-dot.offline{background:#f87171;box-shadow:0 0 6px #f87171}
-.conn-dot.checking{background:#facc15;box-shadow:0 0 6px #facc15;animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.main{flex:1;padding:16px;display:flex;flex-direction:column;gap:16px;max-width:1200px;width:100%;margin:0 auto}
-.upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:40px 20px;text-align:center;cursor:pointer;transition:all .2s}
-.upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:rgba(74,222,128,.05)}
-.upload-zone p{color:var(--dim);margin-top:8px;font-size:14px}
-.upload-zone .icon{font-size:48px}
-.btn{background:var(--accent);color:#000;border:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%;transition:opacity .2s}
-.btn:hover{opacity:.9}
-.btn:disabled{opacity:.4;cursor:not-allowed}
-.result-panel{display:none;gap:16px}
-.result-panel.show{display:flex;flex-direction:column}
-.stats{display:flex;gap:12px;flex-wrap:wrap}
-.stat-card{flex:1;min-width:100px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
-.stat-card .num{font-size:28px;font-weight:700;color:var(--accent)}
-.stat-card .label{font-size:12px;color:var(--dim);margin-top:4px}
-.result-img{text-align:center}
-.result-img img{width:100%;border-radius:8px;border:1px solid var(--border)}
-.result-img .label{font-size:12px;color:var(--dim);text-align:center;margin-top:4px}
-.loading{display:none;text-align:center;padding:40px}
-.loading.show{display:block}
-.spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.status-text{font-size:13px;color:var(--dim);margin-top:8px}
-.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--text);padding:10px 20px;border-radius:8px;font-size:13px;z-index:400;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.3);display:none}
-.toast.error{border-color:#f87171;color:#f87171}
-.toast.success{border-color:var(--accent);color:var(--accent)}
-.key-bar{padding:12px 16px;background:var(--card);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
-.key-bar input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px}
-.key-bar button{background:var(--accent);color:#000;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
-.key-bar .status{font-size:12px;color:var(--accent)}
-.key-bar.hidden{display:none}
-.offline-overlay{display:none;position:fixed;top:0;left:0;right:0;z-index:300;background:#f87171;color:#fff;text-align:center;padding:10px;font-size:14px;font-weight:600}
-.offline-overlay.show{display:block}
-@media(max-width:600px){
-  .stats{flex-direction:row}
-  .stats .stat-card{min-width:0;flex:1;padding:12px 8px}
-  .stats .stat-card .num{font-size:22px}
-  .stats .stat-card .label{font-size:11px}
-  .header h1{font-size:16px}
-  .main{padding:12px}
-  .upload-zone{padding:30px 16px}
-}
-@media(max-width:600px) and (orientation:landscape){
-  .main{padding:8px 12px}
-  .upload-zone{padding:16px}
-  .stats{flex-direction:row}
-}
-.slider-group{display:flex;gap:16px;flex-wrap:wrap}
-.slider-item{flex:1;min-width:200px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
-.slider-item .slider-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.slider-item .slider-label{font-size:13px;color:var(--dim)}
-.slider-item .slider-value{font-size:14px;font-weight:700;color:var(--accent);min-width:40px;text-align:right}
-.slider-item input[type=range]{width:100%;height:6px;-webkit-appearance:none;appearance:none;background:var(--border);border-radius:3px;outline:none;cursor:pointer}
-.slider-item input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--accent);cursor:pointer;box-shadow:0 0 6px rgba(74,222,128,.4)}
-.slider-item input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--accent);cursor:pointer;border:none;box-shadow:0 0 6px rgba(74,222,128,.4)}
-details.adv-settings{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-details.adv-settings>summary{padding:12px 16px;cursor:pointer;font-size:13px;color:var(--dim);user-select:none;list-style:none;display:flex;align-items:center;gap:8px}
-details.adv-settings>summary::-webkit-details-marker{display:none}
-details.adv-settings>summary::before{content:"\25B8";font-size:12px;transition:transform .2s}
-details.adv-settings[open]>summary::before{transform:rotate(90deg)}
-details.adv-settings>summary:hover{color:var(--text)}
-details.adv-settings .slider-group{padding:0 16px 14px}
-.progress-container{margin:12px 0;display:none}
-.progress-container.show{display:block}
-.progress-bar{width:100%;height:8px;background:var(--border);border-radius:4px;overflow:hidden}
-.progress-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .3s;width:0%}
-.progress-text{font-size:12px;color:var(--dim);margin-top:4px;text-align:center}
-.progress-text .speed{color:var(--accent);font-weight:600}
-.retry-btn{background:#f87171;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;margin-top:12px;display:none}
-.retry-btn.show{display:inline-block}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
+
+/* Upload zone pulse animation */
+@keyframes borderPulse{0%,100%{border-color:rgba(74,222,128,.3)}50%{border-color:rgba(74,222,128,.7)}}
+.upload-pulse{border-color:rgba(74,222,128,.3);animation:borderPulse 3s ease-in-out infinite}
+.upload-pulse:hover{animation:none;border-color:#4ade80;background:rgba(74,222,128,.05)}
+
+/* Loading skeleton */
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+.skeleton{background:linear-gradient(90deg,#1a1d27 25%,#2a2d3a 50%,#1a1d27 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px}
+
+/* Custom slider */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;background:#2a2d3a;border-radius:3px;outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:#4ade80;cursor:pointer;box-shadow:0 0 8px rgba(74,222,128,.4);transition:transform .15s}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#4ade80;cursor:pointer;border:none;box-shadow:0 0 8px rgba(74,222,128,.4)}
+
+/* Toast animation */
+@keyframes slideUp{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+@keyframes slideDown{from{transform:translate(-50%,0);opacity:1}to{transform:translate(-50%,20px);opacity:0}}
+.toast-show{animation:slideUp .3s ease-out}
+.toast-hide{animation:slideDown .3s ease-out;opacity:0}
+
+/* Offline overlay */
+@keyframes pulseWarning{0%,100%{opacity:1}50%{opacity:.85}}
+.offline-pulse{animation:pulseWarning 2s ease-in-out infinite}
+
+/* Zoom overlay */
+.zoom-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:500;display:none;justify-content:center;align-items:center;padding:20px;cursor:zoom-out}
+.zoom-overlay.show{display:flex}
+.zoom-overlay img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px}
+
+/* Progress bar */
+.progress-bar{width:100%;height:8px;background:#2a2d3a;border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#4ade80,#22d3ee);border-radius:4px;transition:width .3s ease;width:0%}
+
+/* Confetti-like confidence dots */
+.confi-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 1px}
+.confi-high{background:#4ade80}
+.confi-mid{background:#facc15}
+.confi-low{background:#f87171}
 </style>
 </head>
 <body>
-<div class="offline-overlay" id="offlineOverlay">&#9888; 服务器连接已断开，正在尝试重连...</div>
-<div class="header">
-  <span style="font-size:24px">&#127806;</span>
-  <h1>小麦籽粒检测</h1>
-  <span class="badge">YOLOv8</span>
-  <div class="conn-status" id="connStatus">
-    <span class="conn-dot checking" id="connDot"></span>
-    <span id="connText">检测中...</span>
-  </div>
+<!-- Offline Overlay -->
+<div id="offlineOverlay" class="offline-pulse fixed top-0 left-0 right-0 z-50 bg-danger/90 text-white text-center py-3 font-semibold text-sm hidden">
+  ⚠️ 服务器连接已断开，正在尝试重连...
 </div>
-<div class="key-bar" id="keyBar">
-  <input type="password" id="keyInput" placeholder="输入 API Key">
-  <button onclick="saveKey()">连接</button>
-  <span class="status" id="keyStatus"></span>
-</div>
-<div class="main">
-  <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-    <div class="icon">&#128247;</div>
-    <p><b>点击上传</b> 或 拖拽图片到这里</p>
-    <p>支持 JPG/PNG/BMP，最大 10MB</p>
-    <p style="margin-top:6px;font-size:12px;color:var(--accent)">&#128161; 也可 Ctrl+V 粘贴图片</p>
+
+<!-- Header -->
+<header class="border-b border-surf-border px-4 md:px-6 py-3 flex items-center gap-3">
+  <span class="text-2xl">🌾</span>
+  <h1 class="text-lg font-semibold">小麦籽粒检测</h1>
+  <span class="bg-accent text-black text-xs font-bold px-2.5 py-0.5 rounded-full">YOLOv8</span>
+  <div class="ml-auto flex items-center gap-2 bg-surf-card border border-surf-border rounded-full px-3 py-1.5 text-xs">
+    <span id="connDot" class="w-2.5 h-2.5 rounded-full bg-warn shadow-[0_0_6px_#facc15]"></span>
+    <span id="connText" class="text-dim">检测中...</span>
   </div>
-  <input type="file" id="fileInput" accept="image/*" style="display:none">
-  <button class="btn" id="detectBtn" disabled onclick="detect()">开始检测</button>
-  <div class="progress-container" id="uploadProgress">
+</header>
+
+<!-- API Key Bar -->
+<div id="keyBar" class="hidden border-b border-surf-border bg-surf-card px-4 md:px-6 py-2.5 flex flex-wrap gap-2 items-center">
+  <span class="text-dim text-xs font-medium">🔑 API Key</span>
+  <input id="keyInput" type="password" placeholder="输入 API Key" class="flex-1 min-w-[160px] bg-[#0f1117] border border-surf-border text-white px-3 py-1.5 rounded-lg text-xs focus:outline-none focus:border-accent/50">
+  <button onclick="saveKey()" class="bg-accent text-black text-xs font-semibold px-4 py-1.5 rounded-lg hover:opacity-90 transition-opacity">连接</button>
+  <span id="keyStatus" class="text-xs"></span>
+</div>
+
+<!-- Main Content -->
+<main class="max-w-5xl mx-auto w-full px-4 md:px-6 py-4 md:py-6 space-y-4">
+
+  <!-- Upload Zone -->
+  <div id="dropZone" class="upload-pulse border-2 border-dashed rounded-2xl py-12 md:py-16 px-6 text-center cursor-pointer transition-all duration-300 hover:bg-accent/5">
+    <div class="text-5xl mb-3 opacity-80">📷</div>
+    <p class="text-lg font-medium text-white/90">点击上传 或 拖拽图片到此处</p>
+    <p class="text-sm text-dim mt-1">支持 JPG / PNG / BMP，最大 10MB</p>
+    <p class="text-xs text-accent/80 mt-3 flex items-center justify-center gap-1">
+      <span>💡</span> 也可 <kbd class="bg-surf-card px-1.5 py-0.5 rounded text-xs border border-surf-border">Ctrl+V</kbd> 粘贴图片
+    </p>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" class="hidden">
+
+  <!-- Detect Button -->
+  <button id="detectBtn" disabled onclick="detect()" class="w-full bg-accent text-black font-bold py-3.5 rounded-xl text-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 active:scale-[0.99]">
+    🚀 开始检测
+  </button>
+
+  <!-- Progress Bars -->
+  <div id="uploadProgress" class="hidden space-y-1.5">
+    <div class="flex justify-between text-xs text-dim"><span>⬆ 上传中</span><span id="uploadText">0%</span></div>
     <div class="progress-bar"><div class="progress-fill" id="uploadFill"></div></div>
-    <div class="progress-text" id="uploadText">上传中: 0%</div>
   </div>
-  <div class="progress-container" id="downloadProgress">
+  <div id="downloadProgress" class="hidden space-y-1.5">
+    <div class="flex justify-between text-xs text-dim"><span>⬇ 下载中</span><span id="downloadText">0%</span></div>
     <div class="progress-bar"><div class="progress-fill" id="downloadFill"></div></div>
-    <div class="progress-text" id="downloadText">下载中: 0%</div>
   </div>
-  <div class="loading" id="loading">
-    <div class="spinner"></div>
-    <p id="loadingText">推理中...</p>
-    <div class="status-text" id="loadingDetail"></div>
-  </div>
-  <div class="result-panel" id="resultPanel">
-    <div class="stats">
-      <div class="stat-card"><div class="num" id="countNum">0</div><div class="label">籽粒数</div></div>
-      <div class="stat-card"><div class="num" id="timeNum">0</div><div class="label">耗时 (ms)</div></div>
-      <div class="stat-card"><div class="num" id="sizeNum">0</div><div class="label">图片尺寸</div></div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden space-y-4 py-8">
+    <div class="flex justify-center"><div class="w-10 h-10 border-3 border-surf-border border-t-accent rounded-full animate-spin"></div></div>
+    <p id="loadingText" class="text-center text-sm text-dim">处理中...</p>
+    <p id="loadingDetail" class="text-center text-xs text-dim/60"></p>
+    <!-- Skeleton -->
+    <div class="grid grid-cols-3 gap-3">
+      <div class="skeleton h-20"></div>
+      <div class="skeleton h-20"></div>
+      <div class="skeleton h-20"></div>
     </div>
-    <div class="result-img">
-      <img id="resultImg" src="">
-      <div class="label">检测结果</div>
-    </div>
+    <div class="skeleton h-64 md:h-96"></div>
   </div>
-  <button class="retry-btn" id="retryBtn" onclick="retryDetect()">重试检测</button>
-  <details class="adv-settings" style="margin-top:12px">
-    <summary>高级设置</summary>
-    <div class="slider-group">
-      <div class="slider-item">
-        <div class="slider-header">
-          <span class="slider-label">置信度阈值 (Confidence)</span>
-          <span class="slider-value" id="confValue">0.25</span>
-        </div>
-        <input type="range" id="confSlider" min="0.01" max="1.0" step="0.01" value="0.25" oninput="document.getElementById('confValue').textContent=this.value">
+
+  <!-- Results -->
+  <div id="resultPanel" class="hidden space-y-4">
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-3 gap-3">
+      <div class="bg-surf-card border border-surf-border rounded-xl p-4 text-center">
+        <div class="text-3xl font-bold text-accent" id="countNum">0</div>
+        <div class="text-xs text-dim mt-1">🌾 籽粒数</div>
       </div>
-      <div class="slider-item">
-        <div class="slider-header">
-          <span class="slider-label">IoU 阈值 (覆盖度)</span>
-          <span class="slider-value" id="iouValue">0.50</span>
+      <div class="bg-surf-card border border-surf-border rounded-xl p-4 text-center">
+        <div class="text-3xl font-bold text-accent" id="timeNum">0</div>
+        <div class="text-xs text-dim mt-1">⚡ 耗时 (ms)</div>
+      </div>
+      <div class="bg-surf-card border border-surf-border rounded-xl p-4 text-center">
+        <div class="text-3xl font-bold text-accent" id="sizeNum">0</div>
+        <div class="text-xs text-dim mt-1">📐 尺寸</div>
+      </div>
+    </div>
+
+    <!-- Confidence Distribution (simple visual) -->
+    <div id="confDistribution" class="bg-surf-card border border-surf-border rounded-xl p-4 hidden">
+      <div class="text-xs text-dim mb-2">📊 置信度分布</div>
+      <div class="flex items-end gap-1 h-12" id="confBars"></div>
+      <div class="flex justify-between text-[10px] text-dim/60 mt-1">
+        <span>0.0</span><span>0.5</span><span>1.0</span>
+      </div>
+    </div>
+
+    <!-- Result Image -->
+    <div class="bg-surf-card border border-surf-border rounded-xl overflow-hidden relative group">
+      <img id="resultImg" src="" class="w-full cursor-zoom-in" onclick="toggleZoom()" alt="检测结果">
+      <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity">
+        <span class="text-xs text-white/80">点击查看大图</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Retry Button -->
+  <button id="retryBtn" onclick="retryDetect()" class="hidden w-full bg-danger/20 text-danger border border-danger/30 py-2.5 rounded-xl text-sm font-semibold hover:bg-danger/30 transition-all">
+    🔄 重试检测
+  </button>
+
+  <!-- Advanced Settings -->
+  <details class="bg-surf-card border border-surf-border rounded-xl overflow-hidden">
+    <summary class="px-4 py-3 cursor-pointer text-sm text-dim hover:text-white transition-colors flex items-center gap-2">
+      <span class="text-xs transition-transform duration-200">▶</span> 高级设置
+    </summary>
+    <div class="px-4 pb-4 grid md:grid-cols-2 gap-4">
+      <div class="bg-[#0f1117] border border-surf-border rounded-xl p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs text-dim">置信度阈值 (Confidence)</span>
+          <span class="text-sm font-bold text-accent" id="confValue">0.25</span>
         </div>
-        <input type="range" id="iouSlider" min="0.01" max="1.0" step="0.01" value="0.50" oninput="document.getElementById('iouValue').textContent=this.value">
+        <input type="range" id="confSlider" min="0.01" max="1.0" step="0.01" value="0.25"
+               oninput="document.getElementById('confValue').textContent=parseFloat(this.value).toFixed(2)">
+      </div>
+      <div class="bg-[#0f1117] border border-surf-border rounded-xl p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs text-dim">IoU 阈值 (覆盖度)</span>
+          <span class="text-sm font-bold text-accent" id="iouValue">0.50</span>
+        </div>
+        <input type="range" id="iouSlider" min="0.01" max="1.0" step="0.01" value="0.50"
+               oninput="document.getElementById('iouValue').textContent=parseFloat(this.value).toFixed(2)">
       </div>
     </div>
   </details>
+</main>
+
+<!-- Zoom Overlay -->
+<div id="zoomOverlay" class="zoom-overlay" onclick="toggleZoom()">
+  <img id="zoomImg" src="" alt="放大查看">
 </div>
-<div class="toast" id="toast"></div>
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-24 left-1/2 -translate-x-1/2 bg-surf-card border border-surf-border text-white px-5 py-2.5 rounded-xl text-sm shadow-2xl z-[400] hidden"></div>
+
 <script>
+// ============================================================
+//  State
+// ============================================================
 var apiKey=localStorage.getItem('grain_api_key')||'';
 var selectedFile=null;
 var authDisabled=false;
@@ -167,9 +208,13 @@ var serverOnline=false;
 var heartbeatTimer=null;
 var retryCount=0;
 var MAX_RETRIES=3;
+var lastResult=null;
+
 function $(id){return document.getElementById(id)}
 
-/* ========== 图片压缩 ========== */
+// ============================================================
+//  Image Compression
+// ============================================================
 function compressImage(file,maxWidth,quality){
   maxWidth=maxWidth||1920;
   quality=quality||0.85;
@@ -195,13 +240,31 @@ function compressImage(file,maxWidth,quality){
   });
 }
 
-/* ========== 连接状态 ========== */
+// ============================================================
+//  Connection Status
+// ============================================================
 function setConnState(state,detail){
   var dot=$('connDot'),text=$('connText'),overlay=$('offlineOverlay');
-  dot.className='conn-dot';
-  if(state==='online'){dot.classList.add('online');text.textContent='已连接';text.style.color='#4ade80';overlay.classList.remove('show');serverOnline=true}
-  else if(state==='offline'){dot.classList.add('offline');text.textContent='未连接';text.style.color='#f87171';overlay.classList.add('show');serverOnline=false}
-  else{dot.classList.add('checking');text.textContent=detail||'检测中...';text.style.color='#facc15'}
+  dot.className='w-2.5 h-2.5 rounded-full';
+  if(state==='online'){
+    dot.classList.add('bg-accent','shadow-[0_0_6px_#4ade80]');
+    text.textContent='已连接';
+    text.style.color='#4ade80';
+    overlay.classList.add('hidden');
+    overlay.classList.remove('flex');
+    serverOnline=true;
+  }else if(state==='offline'){
+    dot.classList.add('bg-danger','shadow-[0_0_6px_#f87171]');
+    text.textContent='未连接';
+    text.style.color='#f87171';
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+    serverOnline=false;
+  }else{
+    dot.classList.add('bg-warn','shadow-[0_0_6px_#facc15]');
+    text.textContent=detail||'检测中...';
+    text.style.color='#facc15';
+  }
 }
 
 function pingServer(){
@@ -210,7 +273,12 @@ function pingServer(){
     var tid=setTimeout(function(){ctrl.abort()},5000);
     fetch('/api/ping',{signal:ctrl.signal}).then(function(r){
       clearTimeout(tid);
-      if(r.ok){return r.json().then(function(d){if(d.auth===false)authDisabled=true;setConnState('online');resolve(true)})}
+      if(r.ok){
+        return r.json().then(function(d){
+          if(d.auth===false)authDisabled=true;
+          setConnState('online');resolve(true);
+        });
+      }
       setConnState('offline');resolve(false);
     }).catch(function(){clearTimeout(tid);setConnState('offline');resolve(false)});
   });
@@ -218,93 +286,153 @@ function pingServer(){
 
 function startHeartbeat(){pingServer();heartbeatTimer=setInterval(pingServer,5000)}
 
-/* ========== Toast ========== */
+// ============================================================
+//  Toast
+// ============================================================
 function toast(msg,type){
-  var t=$('toast');t.textContent=msg;t.className='toast';
-  if(type==='error')t.classList.add('error');else if(type==='success')t.classList.add('success');
-  t.style.display='block';setTimeout(function(){t.style.display='none'},3000);
+  var t=$('toast');t.textContent=msg;
+  t.className='fixed bottom-24 left-1/2 -translate-x-1/2 bg-surf-card border text-white px-5 py-2.5 rounded-xl text-sm shadow-2xl z-[400] toast-show';
+  if(type==='error'){t.style.borderColor='#f87171';t.style.color='#f87171'}
+  else if(type==='success'){t.style.borderColor='#4ade80';t.style.color='#4ade80'}
+  else{t.style.borderColor='#2a2d3a'}
+  t.classList.remove('hidden');
+  setTimeout(function(){t.classList.add('toast-hide');setTimeout(function(){t.classList.add('hidden');t.classList.remove('toast-show','toast-hide')},300)},2700);
 }
 
-/* ========== API Key ========== */
+// ============================================================
+//  API Key
+// ============================================================
 fetch('/api/health').then(function(r){return r.json()}).then(function(d){
   if(d.auth===false){authDisabled=true;$('keyBar').classList.add('hidden')}
+  else{$('keyBar').classList.remove('hidden')}
 }).catch(function(){});
-if(apiKey){$('keyInput').value='***';$('keyStatus').textContent='已连接';$('keyStatus').style.color='var(--accent)'}
+if(apiKey){
+  $('keyInput').value='***';
+  $('keyStatus').textContent='✅ 已保存';
+  $('keyStatus').style.color='#4ade80';
+}
+
 function saveKey(){
   apiKey=$('keyInput').value.trim();
   if(!apiKey){toast('请输入 API Key','error');return}
   localStorage.setItem('grain_api_key',apiKey);
-  $('keyStatus').textContent='Key 已保存';$('keyStatus').style.color='var(--accent)';
-  toast('Key 已保存','success');
+  $('keyStatus').textContent='✅ Key 已保存';
+  $('keyStatus').style.color='#4ade80';
+  toast('API Key 已保存','success');
 }
 
-/* ========== 文件选择 ========== */
+// ============================================================
+//  File Handling
+// ============================================================
 $('fileInput').addEventListener('change',function(e){if(e.target.files[0])handleFile(e.target.files[0])});
+
 var dz=$('dropZone');
-dz.addEventListener('dragover',function(e){e.preventDefault();dz.classList.add('drag')});
-dz.addEventListener('dragleave',function(){dz.classList.remove('drag')});
-dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
+dz.addEventListener('dragover',function(e){e.preventDefault();dz.classList.add('!border-accent','!bg-accent/5');dz.classList.remove('upload-pulse')});
+dz.addEventListener('dragleave',function(){dz.classList.remove('!border-accent','!bg-accent/5');dz.classList.add('upload-pulse')});
+dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('!border-accent','!bg-accent/5');dz.classList.add('upload-pulse');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])});
 
 function handleFile(f){
   if(!f.type.startsWith('image/')){toast('请上传图片文件','error');return}
   if(f.size>10*1024*1024){toast('文件过大，最大 10MB','error');return}
-  selectedFile=f;toast('已选择: '+f.name,'success');$('detectBtn').disabled=false;
+  selectedFile=f;
+  $('detectBtn').disabled=false;
+  $('detectBtn').textContent='🚀 检测 '+f.name;
+  toast('已选择: '+f.name,'success');
 }
 
-/* ========== 进度条 ========== */
-function showUploadProgress(show){$('uploadProgress').classList.toggle('show',show);if(!show){$('uploadFill').style.width='0%';$('uploadText').textContent='上传中: 0%'}}
-function updateUploadProgress(pct,speed){$('uploadFill').style.width=pct+'%';var t='上传中: '+pct+'%';if(speed)t+=' <span class="speed">'+speed+'</span>';$('uploadText').innerHTML=t}
-function showDownloadProgress(show){$('downloadProgress').classList.toggle('show',show);if(!show){$('downloadFill').style.width='0%';$('downloadText').textContent='下载中: 0%'}}
-function updateDownloadProgress(pct,speed){$('downloadFill').style.width=pct+'%';var t='下载中: '+pct+'%';if(speed)t+=' <span class="speed">'+speed+'</span>';$('downloadText').innerHTML=t}
+// ============================================================
+//  Progress UI
+// ============================================================
+function showProgress(id,show){var el=$(id);if(show){el.classList.remove('hidden')}else{el.classList.add('hidden')}}
+function updateProgress(fillId,textId,pct,speed){$(fillId).style.width=pct+'%';var t=pct+'%';if(speed)t+=' ('+speed+')';$(textId).textContent=t}
 
 function formatSize(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB'}
 function formatSpeed(bps){if(bps<1024)return bps.toFixed(0)+'B/s';if(bps<1048576)return(bps/1024).toFixed(1)+'KB/s';return(bps/1048576).toFixed(1)+'MB/s'}
 
-/* ========== 检测 ========== */
+// ============================================================
+//  Confidence Distribution Visualization
+// ============================================================
+function showConfDistribution(detections){
+  var container=$('confDistribution');
+  var bars=$('confBars');
+  if(!detections||detections.length<2){container.classList.add('hidden');return}
+  container.classList.remove('hidden');
+  bars.innerHTML='';
+  var confs=detections.map(function(d){return d.confidence});
+  var bins=[0,0,0,0,0,0,0,0,0,0];
+  confs.forEach(function(c){var idx=Math.min(9,Math.floor(c*10));bins[idx]++});
+  var max=Math.max(1,Math.max.apply(null,bins));
+  bins.forEach(function(count){
+    var bar=document.createElement('div');
+    var pct=(count/max*100).toFixed(0);
+    bar.className='flex-1 bg-accent/60 rounded-t';
+    bar.style.height=pct+'%';
+    bar.title=count+'个';
+    bars.appendChild(bar);
+  });
+}
+
+// ============================================================
+//  Detect
+// ============================================================
 function detect(){
   if(!selectedFile){toast('请先选择图片','error');return}
   if(!authDisabled&&!apiKey){toast('请先输入 API Key','error');return}
   if(!serverOnline){toast('服务器未连接，请稍后重试','error');return}
 
-  $('detectBtn').disabled=true;$('retryBtn').classList.remove('show');
-  $('resultPanel').classList.remove('show');$('loading').classList.add('show');
-  $('loadingText').textContent='正在压缩图片...';
+  $('detectBtn').disabled=true;
+  $('retryBtn').classList.add('hidden');
+  $('resultPanel').classList.add('hidden');
+  $('loading').classList.remove('hidden');
+  $('loadingText').textContent='📦 正在压缩图片...';
   $('loadingDetail').textContent=selectedFile.name+' ('+formatSize(selectedFile.size)+')';
 
   compressImage(selectedFile).then(function(compressedFile){
-    $('loadingText').textContent='正在上传...';
+    $('loadingText').textContent='⬆ 正在上传...';
     $('loadingDetail').textContent='压缩后: '+formatSize(compressedFile.size)+' (原始: '+formatSize(selectedFile.size)+')';
     return uploadWithProgress(compressedFile);
   }).then(function(result){
-    $('loadingText').textContent='正在加载结果...';
-    $('loadingDetail').textContent='模型处理中，请稍候';
+    $('loadingText').textContent='✅ 检测完成';
+    $('loadingDetail').textContent='模型处理完成';
     $('countNum').textContent=result.count;
     $('timeNum').textContent=result.elapsed_ms;
-    $('sizeNum').textContent=result.image_size.width+'\u00D7'+result.image_size.height;
+    $('sizeNum').textContent=result.image_size.width+'×'+result.image_size.height;
     $('resultImg').src=result.result_image;
-    $('resultPanel').classList.add('show');
+    $('zoomImg').src=result.result_image;
+    $('resultPanel').classList.remove('hidden');
+    showConfDistribution(result.detections);
+    lastResult=result;
     toast('检测完成: '+result.count+' 粒','success');
     retryCount=0;
   }).catch(function(e){
-    console.error('检测失败:',e);
-    if(retryCount<MAX_RETRIES){toast('检测失败，'+(MAX_RETRIES-retryCount)+' 次重试机会，点击重试按钮','error');$('retryBtn').classList.add('show')}
-    else{toast('检测失败，已达最大重试次数','error')}
+    console.error('Detection failed:',e);
+    if(retryCount<MAX_RETRIES){
+      toast('检测失败，'+(MAX_RETRIES-retryCount)+' 次重试机会','error');
+      $('retryBtn').classList.remove('hidden');
+    }else{
+      toast('检测失败，已达最大重试次数','error');
+    }
   }).finally(function(){
-    $('loading').classList.remove('show');$('detectBtn').disabled=false;
-    showUploadProgress(false);showDownloadProgress(false);
+    $('loading').classList.add('hidden');
+    $('detectBtn').disabled=false;
+    $('detectBtn').textContent='🚀 开始检测';
+    showProgress('uploadProgress',false);
+    showProgress('downloadProgress',false);
   });
 }
 
 function retryDetect(){retryCount++;detect()}
 
-/* ========== 上传 with 进度(XHR) ========== */
+// ============================================================
+//  Upload with XHR Progress
+// ============================================================
 function uploadWithProgress(file){
   return new Promise(function(resolve,reject){
     var xhr=new XMLHttpRequest();
     var fd=new FormData();fd.append('file',file);
     var conf=document.getElementById('confSlider').value;
     var iou=document.getElementById('iouSlider').value;
-    xhr.open('POST','/api/detect?conf='+conf+'&iou='+iou);
+    xhr.open('POST','/api/detect?conf='+conf+'&iou='+iou,true);
     if(!authDisabled&&apiKey)xhr.setRequestHeader('Authorization','Bearer '+apiKey);
 
     var t0=Date.now();
@@ -312,14 +440,14 @@ function uploadWithProgress(file){
       if(e.lengthComputable){
         var pct=Math.round(e.loaded/e.total*100);
         var spd=(Date.now()-t0)>0?formatSpeed(e.loaded/((Date.now()-t0)/1000)):'';
-        updateUploadProgress(pct,spd);
+        updateProgress('uploadFill','uploadText',pct,spd);
       }
     };
     xhr.onprogress=function(e){
       if(e.lengthComputable){
         var pct=Math.round(e.loaded/e.total*100);
         var spd=(Date.now()-t0)>0?formatSpeed(e.loaded/((Date.now()-t0)/1000)):'';
-        updateDownloadProgress(pct,spd);
+        updateProgress('downloadFill','downloadText',pct,spd);
       }
     };
     xhr.onload=function(){
@@ -337,18 +465,46 @@ function uploadWithProgress(file){
     xhr.onerror=function(){reject(new Error('网络错误，请检查连接'))};
     xhr.ontimeout=function(){reject(new Error('请求超时，请检查网络'))};
     xhr.timeout=240000;
-    showUploadProgress(true);showDownloadProgress(true);
+    showProgress('uploadProgress',true);
+    showProgress('downloadProgress',true);
     xhr.send(fd);
   });
 }
 
-/* ========== 粘贴 ========== */
+// ============================================================
+//  Image Zoom
+// ============================================================
+function toggleZoom(){
+  var overlay=$('zoomOverlay');
+  overlay.classList.toggle('show');
+}
+
+// ============================================================
+//  Paste Support
+// ============================================================
 document.addEventListener('paste',function(e){
-  var items=e.clipboardData&&e.clipboardData.items;if(!items)return;
-  for(var i=0;i<items.length;i++){if(items[i].type.startsWith('image/')){handleFile(items[i].getAsFile());break}}
+  var items=e.clipboardData&&e.clipboardData.items;
+  if(!items)return;
+  for(var i=0;i<items.length;i++){
+    if(items[i].type.startsWith('image/')){
+      handleFile(items[i].getAsFile());
+      break;
+    }
+  }
 });
 
-/* ========== 启动 ========== */
+// ============================================================
+//  Keyboard shortcut: Enter to detect
+// ============================================================
+document.addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&!$('detectBtn').disabled&&selectedFile){
+    detect();
+  }
+});
+
+// ============================================================
+//  Init
+// ============================================================
 startHeartbeat();
 </script>
 </body>
