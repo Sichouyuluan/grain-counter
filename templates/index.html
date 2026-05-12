@@ -72,7 +72,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 </header>
 
 <!-- API Key Bar -->
-<div id="keyBar" class="hidden border-b border-surf-border bg-surf-card px-4 md:px-6 py-2.5 flex flex-wrap gap-2 items-center">
+<div id="keyBar" class="border-b border-surf-border bg-surf-card px-4 md:px-6 py-2.5 flex flex-wrap gap-2 items-center">
   <span class="text-dim text-xs font-medium">🔑 API Key</span>
   <input id="keyInput" type="password" placeholder="输入 API Key" class="flex-1 min-w-[160px] bg-[#0f1117] border border-surf-border text-white px-3 py-1.5 rounded-lg text-xs focus:outline-none focus:border-accent/50">
   <button onclick="saveKey()" class="bg-accent text-black text-xs font-semibold px-4 py-1.5 rounded-lg hover:opacity-90 transition-opacity">连接</button>
@@ -83,7 +83,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 <main class="max-w-5xl mx-auto w-full px-4 md:px-6 py-4 md:py-6 space-y-4">
 
   <!-- Upload Zone -->
-  <div id="dropZone" class="upload-pulse border-2 border-dashed rounded-2xl py-12 md:py-16 px-6 text-center cursor-pointer transition-all duration-300 hover:bg-accent/5">
+  <div id="dropZone" class="upload-pulse border-2 border-dashed rounded-2xl py-12 md:py-16 px-6 text-center cursor-pointer transition-all duration-300 hover:bg-accent/5" onclick="document.getElementById('fileInput').click()">
     <div class="text-5xl mb-3 opacity-80">📷</div>
     <p class="text-lg font-medium text-white/90">点击上传 或 拖拽图片到此处</p>
     <p class="text-sm text-dim mt-1">支持 JPG / PNG / BMP，最大 10MB</p>
@@ -135,17 +135,8 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
         <div class="text-xs text-dim mt-1">⚡ 耗时 (ms)</div>
       </div>
       <div class="bg-surf-card border border-surf-border rounded-xl p-4 text-center">
-        <div class="text-3xl font-bold text-accent" id="sizeNum">0</div>
+        <div class="text-3xl md:text-3xl text-lg font-bold text-accent break-all" id="sizeNum">0</div>
         <div class="text-xs text-dim mt-1">📐 尺寸</div>
-      </div>
-    </div>
-
-    <!-- Confidence Distribution (simple visual) -->
-    <div id="confDistribution" class="bg-surf-card border border-surf-border rounded-xl p-4 hidden">
-      <div class="text-xs text-dim mb-2">📊 置信度分布</div>
-      <div class="flex items-end gap-1 h-12" id="confBars"></div>
-      <div class="flex justify-between text-[10px] text-dim/60 mt-1">
-        <span>0.0</span><span>0.5</span><span>1.0</span>
       </div>
     </div>
 
@@ -156,6 +147,20 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
         <span class="text-xs text-white/80">点击查看大图</span>
       </div>
     </div>
+
+    <!-- Confidence Distribution -->
+    <div id="confDistribution" class="bg-surf-card border border-surf-border rounded-xl p-4 hidden">
+      <div class="text-xs text-dim mb-2">📊 置信度分布</div>
+      <div class="flex items-end gap-1 h-12" id="confBars"></div>
+      <div class="flex justify-between text-[10px] text-dim/60 mt-1">
+        <span>0.0</span><span>0.5</span><span>1.0</span>
+      </div>
+    </div>
+
+    <!-- Save Button (识别不准) -->
+    <button id="saveBtn" onclick="saveImage()" class="hidden w-full bg-orange-500/20 text-orange-400 border border-orange-500/30 py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-500/30 transition-all">
+      ❌ 这次识别不准 — 保存原图
+    </button>
   </div>
 
   <!-- Retry Button -->
@@ -209,6 +214,7 @@ var heartbeatTimer=null;
 var retryCount=0;
 var MAX_RETRIES=3;
 var lastResult=null;
+var lastOriginalFile=null;
 
 function $(id){return document.getElementById(id)}
 
@@ -335,6 +341,7 @@ function handleFile(f){
   if(!f.type.startsWith('image/')){toast('请上传图片文件','error');return}
   if(f.size>10*1024*1024){toast('文件过大，最大 10MB','error');return}
   selectedFile=f;
+  lastOriginalFile=f;
   $('detectBtn').disabled=false;
   $('detectBtn').textContent='🚀 检测 '+f.name;
   toast('已选择: '+f.name,'success');
@@ -382,6 +389,7 @@ function detect(){
 
   $('detectBtn').disabled=true;
   $('retryBtn').classList.add('hidden');
+  $('saveBtn').classList.add('hidden');
   $('resultPanel').classList.add('hidden');
   $('loading').classList.remove('hidden');
   $('loadingText').textContent='📦 正在压缩图片...';
@@ -401,6 +409,10 @@ function detect(){
     $('zoomImg').src=result.result_image;
     $('resultPanel').classList.remove('hidden');
     showConfDistribution(result.detections);
+    $('saveBtn').classList.remove('hidden');
+    $('saveBtn').disabled=false;
+    $('saveBtn').textContent='❌ 这次识别不准 — 保存原图';
+    $('saveBtn').style.borderColor='';$('saveBtn').style.color='';
     lastResult=result;
     toast('检测完成: '+result.count+' 粒','success');
     retryCount=0;
@@ -422,6 +434,42 @@ function detect(){
 }
 
 function retryDetect(){retryCount++;detect()}
+
+// ============================================================
+//  Save Image (识别不准)
+// ============================================================
+function saveImage(){
+  if(!lastOriginalFile){toast('没有可保存的图片','error');return}
+  if(!authDisabled&&!apiKey){toast('请先输入 API Key','error');return}
+  if(!serverOnline){toast('服务器未连接','error');return}
+
+  var btn=$('saveBtn');
+  btn.disabled=true;
+  btn.textContent='⏳ 正在保存...';
+
+  var fd=new FormData();fd.append('file',lastOriginalFile);
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/save-image',true);
+  if(!authDisabled&&apiKey)xhr.setRequestHeader('Authorization','Bearer '+apiKey);
+  xhr.onload=function(){
+    if(xhr.status>=200&&xhr.status<300){
+      btn.textContent='✅ 已保存到优质照片';
+      btn.style.borderColor='#4ade80';btn.style.color='#4ade80';
+      toast('原图已保存','success');
+    }else{
+      btn.disabled=false;
+      btn.textContent='❌ 这次识别不准 — 保存原图';
+      toast('保存失败','error');
+    }
+  };
+  xhr.onerror=function(){
+    btn.disabled=false;
+    btn.textContent='❌ 这次识别不准 — 保存原图';
+    toast('网络错误','error');
+  };
+  xhr.timeout=30000;
+  xhr.send(fd);
+}
 
 // ============================================================
 //  Upload with XHR Progress

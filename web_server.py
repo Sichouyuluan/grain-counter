@@ -10,6 +10,7 @@ import re
 import time
 import json
 import base64
+import subprocess
 import secrets
 import logging
 from contextlib import asynccontextmanager
@@ -279,9 +280,35 @@ async def valuable_open_dir():
     vdir = get_config("valuable_dir", "Valuable photos")
     abs_dir = os.path.abspath(vdir)
     if os.path.exists(abs_dir):
-        os.startfile(abs_dir)
+        subprocess.Popen(["explorer", abs_dir], creationflags=subprocess.CREATE_NO_WINDOW)
         return {"ok": True, "dir": abs_dir}
     return {"ok": False, "error": "目录不存在"}
+
+
+@app.post("/api/save-image")
+async def save_image(
+    file: UploadFile = File(...),
+    _: str = Depends(verify_api_key),
+):
+    """手动保存图片到优质照片目录（用于前端'识别不准'功能）"""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="请上传图片文件")
+    content = await file.read()
+    nparr = np.frombuffer(content, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="无法解析图片")
+    vdir = get_config("valuable_dir", "Valuable photos")
+    os.makedirs(vdir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = os.path.splitext(file.filename or "image.jpg")[1] or ".jpg"
+    save_name = f"manual_{timestamp}{ext}"
+    save_path = os.path.join(vdir, save_name)
+    cv2.imwrite(save_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    valuable_saver._saved_count += 1
+    logger.info(f"[MANUAL_SAVE] {save_name}")
+    return {"ok": True, "path": save_name}
+
 
 
 # ============================================================
