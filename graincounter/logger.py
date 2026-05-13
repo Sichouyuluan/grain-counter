@@ -24,6 +24,16 @@ class PinHidingFilter(logging.Filter):
         return True
 
 
+class UvicornSafeFilter(logging.Filter):
+    """修复 uvicorn access logger 的格式化崩溃（%s 参数缺失）"""
+
+    def filter(self, record):
+        # 如果 msg 包含 %s 但 args 为空，清空 args 防止格式化错误
+        if hasattr(record, 'msg') and '%s' in str(record.msg) and not record.args:
+            record.args = ()
+        return True
+
+
 def setup_logger(name="grain_web", log_dir=None, level=logging.INFO) -> logging.Logger:
     """配置并返回 logger 实例"""
     logger = logging.getLogger(name)
@@ -58,11 +68,13 @@ def setup_logger(name="grain_web", log_dir=None, level=logging.INFO) -> logging.
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    # 给 uvicorn access log 添加脱敏过滤器
+    # 给 uvicorn access log 添加脱敏 + 安全过滤器
     for _name in ("uvicorn.access", "uvicorn"):
         _l = logging.getLogger(_name)
         if not any(isinstance(f, PinHidingFilter) for f in _l.filters):
             _l.addFilter(PinHidingFilter())
+        if not any(isinstance(f, UvicornSafeFilter) for f in _l.filters):
+            _l.addFilter(UvicornSafeFilter())
 
     return logger
 

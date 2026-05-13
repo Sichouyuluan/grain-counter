@@ -39,9 +39,16 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .offline-pulse{animation:pulseWarning 2s ease-in-out infinite}
 
 /* Zoom overlay */
-.zoom-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:500;display:none;justify-content:center;align-items:center;padding:20px;cursor:zoom-out}
-.zoom-overlay.show{display:flex}
-.zoom-overlay img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px}
+.zoom-overlay{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:500;display:none;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:none}
+.zoom-overlay.show{display:block}
+.zoom-overlay .zoom-close{position:absolute;top:16px;right:16px;z-index:510;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.zoom-overlay .zoom-ctrl{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:510;display:flex;gap:6px;background:rgba(0,0,0,.6);border-radius:8px;padding:4px}
+.zoom-overlay .zoom-ctrl button{width:36px;height:36px;border-radius:6px;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.zoom-overlay .zoom-ctrl button:hover{background:rgba(255,255,255,.25)}
+.zoom-overlay .zoom-ctrl .zoom-level{min-width:52px;text-align:center;font-size:12px;color:#aaa;line-height:36px}
+.zoom-overlay .zoom-img-wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;cursor:grab}
+.zoom-overlay .zoom-img-wrap.dragging{cursor:grabbing}
+.zoom-overlay .zoom-img-wrap img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;pointer-events:none;will-change:transform}
 
 /* Progress bar */
 .progress-bar{width:100%;height:8px;background:#2a2d3a;border-radius:4px;overflow:hidden}
@@ -142,7 +149,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 
     <!-- Result Image -->
     <div class="bg-surf-card border border-surf-border rounded-xl overflow-hidden relative group">
-      <img id="resultImg" src="" class="w-full cursor-zoom-in" onclick="toggleZoom()" alt="检测结果">
+      <img id="resultImg" src="" class="w-full cursor-zoom-in" onclick="zoomOpen(this.src)" alt="检测结果">
       <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity">
         <span class="text-xs text-white/80">点击查看大图</span>
       </div>
@@ -190,13 +197,33 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
         <input type="range" id="iouSlider" min="0.01" max="1.0" step="0.01" value="0.50"
                oninput="document.getElementById('iouValue').textContent=parseFloat(this.value).toFixed(2)">
       </div>
+      <div class="bg-[#0f1117] border border-surf-border rounded-xl p-4 md:col-span-2">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs text-dim">模型文件</span>
+          <span class="text-xs text-accent" id="modelStatus">加载中...</span>
+        </div>
+        <select id="modelSelect" onchange="switchModel(this.value)"
+                class="w-full bg-surf-card border border-surf-border text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-accent/50 cursor-pointer">
+          <option value="">加载中...</option>
+        </select>
+      </div>
     </div>
   </details>
 </main>
 
 <!-- Zoom Overlay -->
-<div id="zoomOverlay" class="zoom-overlay" onclick="toggleZoom()">
-  <img id="zoomImg" src="" alt="放大查看">
+<div id="zoomOverlay" class="zoom-overlay">
+  <button class="zoom-close" onclick="zoomClose()" title="关闭 (ESC)">&times;</button>
+  <div id="zoomWrap" class="zoom-img-wrap">
+    <img id="zoomImg" src="" alt="放大查看" draggable="false">
+  </div>
+  <div class="zoom-ctrl">
+    <button onclick="zoomOut()" title="缩小">−</button>
+    <span class="zoom-level" id="zoomLevel">100%</span>
+    <button onclick="zoomIn()" title="放大">+</button>
+    <button onclick="zoomFit()" title="适应窗口">⊡</button>
+    <button onclick="zoomMax()" title="最大缩放">⊞</button>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -406,7 +433,6 @@ function detect(){
     $('timeNum').textContent=result.elapsed_ms;
     $('sizeNum').textContent=result.image_size.width+'×'+result.image_size.height;
     $('resultImg').src=result.result_image;
-    $('zoomImg').src=result.result_image;
     $('resultPanel').classList.remove('hidden');
     showConfDistribution(result.detections);
     $('saveBtn').classList.remove('hidden');
@@ -520,12 +546,83 @@ function uploadWithProgress(file){
 }
 
 // ============================================================
-//  Image Zoom
+//  Image Zoom — full viewer with drag, wheel, pinch, 1000% max
 // ============================================================
-function toggleZoom(){
-  var overlay=$('zoomOverlay');
-  overlay.classList.toggle('show');
+(function(){
+var ZM={scale:1,x:0,y:0,minScale:0.1,maxScale:10,dragging:false,startX:0,startY:0,origX:0,origY:0,
+  pinchDist:0,pinchScale:1,imgW:0,imgH:0};
+var overlay,wrap,img,levelEl;
+
+function initZoom(){
+  overlay=$('zoomOverlay');wrap=$('zoomWrap');img=$('zoomImg');levelEl=$('zoomLevel');
+  wrap.addEventListener('mousedown',onMouseDown);
+  wrap.addEventListener('wheel',onWheel,{passive:false});
+  wrap.addEventListener('touchstart',onTouchStart,{passive:false});
+  wrap.addEventListener('touchmove',onTouchMove,{passive:false});
+  wrap.addEventListener('touchend',onTouchEnd);
+  overlay.addEventListener('keydown',onKeyDown);
+  overlay.addEventListener('mousedown',function(e){if(e.target===overlay)zoomClose()});
 }
+
+window.zoomOpen=function(src){
+  if(!overlay)initZoom();
+  img.src=src;img.onload=function(){ZM.imgW=img.naturalWidth;ZM.imgH=img.naturalHeight;zoomFit()};
+  overlay.classList.add('show');overlay.tabIndex=0;overlay.focus();
+};
+
+window.zoomClose=function(){overlay.classList.remove('show');ZM.scale=1;ZM.x=0;ZM.y=0};
+
+window.zoomIn=function(){setZoom(ZM.scale*1.5)};
+window.zoomOut=function(){setZoom(ZM.scale/1.5)};
+window.zoomFit=function(){ZM.x=0;ZM.y=0;setZoom(1)};
+window.zoomMax=function(){
+  var r=overlay.getBoundingClientRect();
+  var sx=r.width*0.95/(ZM.imgW||1),sy=r.height*0.95/(ZM.imgH||1);
+  setZoom(Math.min(ZM.maxScale,Math.max(sx,sy)*1));ZM.x=0;ZM.y=0;apply();
+};
+
+function setZoom(s){ZM.scale=Math.max(ZM.minScale,Math.min(ZM.maxScale,s));apply()}
+
+function apply(){
+  var tx='translate('+ZM.x+'px,'+ZM.y+'px) scale('+ZM.scale+')';
+  img.style.transform=tx;
+  levelEl.textContent=Math.round(ZM.scale*100)+'%';
+}
+
+function onMouseDown(e){
+  if(e.button!==0)return;e.preventDefault();ZM.dragging=true;ZM.startX=e.clientX;ZM.startY=e.clientY;ZM.origX=ZM.x;ZM.origY=ZM.y;
+  wrap.classList.add('dragging');
+  var onMove=function(ev){if(!ZM.dragging)return;ZM.x=ZM.origX+(ev.clientX-ZM.startX);ZM.y=ZM.origY+(ev.clientY-ZM.startY);apply()};
+  var onUp=function(){ZM.dragging=false;wrap.classList.remove('dragging');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp)};
+  document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
+}
+
+function onWheel(e){
+  e.preventDefault();var d=e.deltaY>0?0.8:1.25;var r=wrap.getBoundingClientRect();
+  var mx=(e.clientX-r.left-r.width/2),my=(e.clientY-r.top-r.height/2);
+  var ns=Math.max(ZM.minScale,Math.min(ZM.maxScale,ZM.scale*d));var f=ns/ZM.scale;
+  ZM.x=mx-f*(mx-ZM.x);ZM.y=my-f*(my-ZM.y);ZM.scale=ns;apply();
+}
+
+function dist(t){var dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy)}
+
+function onTouchStart(e){
+  if(e.touches.length===2){e.preventDefault();ZM.pinchDist=dist(e.touches);ZM.pinchScale=ZM.scale}
+  else if(e.touches.length===1&&ZM.scale>1){e.preventDefault();ZM.dragging=true;ZM.startX=e.touches[0].clientX;ZM.startY=e.touches[0].clientY;ZM.origX=ZM.x;ZM.origY=ZM.y}
+}
+
+function onTouchMove(e){
+  if(e.touches.length===2){e.preventDefault();var d=dist(e.touches);var ns=ZM.pinchScale*(d/ZM.pinchDist);
+    setZoom(Math.max(ZM.minScale,Math.min(ZM.maxScale,ns)))}
+  else if(e.touches.length===1&&ZM.dragging){e.preventDefault();ZM.x=ZM.origX+(e.touches[0].clientX-ZM.startX);ZM.y=ZM.origY+(e.touches[0].clientY-ZM.startY);apply()}
+}
+
+function onTouchEnd(e){if(e.touches.length<2)ZM.pinchDist=0;if(e.touches.length===0)ZM.dragging=false}
+
+function onKeyDown(e){if(e.key==='Escape')zoomClose();else if(e.key==='+'||e.key==='=')zoomIn();else if(e.key==='-')zoomOut();else if(e.key==='0')zoomFit()}
+
+window.toggleZoom=function(src){if(overlay&&overlay.classList.contains('show'))zoomClose();else if(src)zoomOpen(src)};
+})();
 
 // ============================================================
 //  Paste Support
@@ -551,9 +648,37 @@ document.addEventListener('keydown',function(e){
 });
 
 // ============================================================
+//  Model Selection
+// ============================================================
+function loadModels(){
+  fetch('/api/models').then(function(r){return r.json()}).then(function(d){
+    var sel=$('modelSelect');sel.innerHTML='';
+    if(!d.models||d.models.length===0){sel.innerHTML='<option value="">无可用模型</option>';return}
+    d.models.forEach(function(m){
+      var opt=document.createElement('option');opt.value=m.name;
+      opt.textContent=m.name+' ('+m.size_mb+'MB)';if(m.active)opt.selected=true;
+      sel.appendChild(opt)
+    });
+    var cur=d.models.find(function(m){return m.active});
+    $('modelStatus').textContent=cur?'当前: '+cur.name:'未选择'
+  }).catch(function(){$('modelStatus').textContent='获取失败'})
+}
+
+function switchModel(name){
+  if(!name)return;$('modelStatus').textContent='切换中...';
+  var fd=JSON.stringify({model:name});
+  fetch('/api/select-model',{method:'POST',headers:{'Content-Type':'application/json'},body:fd})
+  .then(function(r){return r.json()}).then(function(d){
+    if(d.ok){$('modelStatus').textContent='已切换: '+name;toast('模型已切换: '+name,'success');loadModels()}
+    else{$('modelStatus').textContent='切换失败';toast('模型切换失败','error')}
+  }).catch(function(){$('modelStatus').textContent='切换失败';toast('网络错误','error')})
+}
+
+// ============================================================
 //  Init
 // ============================================================
 startHeartbeat();
+loadModels();
 </script>
 </body>
 </html>

@@ -38,6 +38,8 @@ def parse_user_agent(ua_string: str) -> dict:
             break
 
     # --- 品牌 ---
+    # 检测顺序很重要：先排除非Apple的WebKit设备（华为/荣耀/小米等UA含"AppleWebKit"）
+    # "Apple" 关键词只在排除其他品牌后才匹配，避免误判
     brand_rules = [
         (["XiaoMi", "MiuiBrowser", "MIUI", "Redmi", "Xiaomi"], "小米"),
         (["HUAWEI", "Huawei", "HarmonyOS"], "华为"),
@@ -47,7 +49,6 @@ def parse_user_agent(ua_string: str) -> dict:
         (["OnePlus"], "一加"),
         (["Realme"], "Realme"),
         (["Honor", "HONOR"], "荣耀"),
-        (["iPhone", "iPad", "Apple"], "Apple"),
         (["Pixel"], "Google"),
         (["Nokia"], "Nokia"),
         (["LG-", "LG;"], "LG"),
@@ -58,6 +59,12 @@ def parse_user_agent(ua_string: str) -> dict:
         if any(kw in ua for kw in keywords):
             result["brand"] = brand
             break
+
+    # Apple 检测：排除 UA 中含 "AppleWebKit" 但不是 Apple 设备的情况
+    # 只有含 iPhone/iPad/iPod/Macintosh 时才是真正的 Apple 设备
+    if not result["brand"]:
+        if "iPhone" in ua or "iPad" in ua or "iPod" in ua or "Macintosh" in ua:
+            result["brand"] = "Apple"
 
     # --- 浏览器 ---
     browser_rules = [

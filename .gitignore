@@ -26,5 +26,20 @@ Thumbs.db
 # Project specific
 node_modules/
 
-# Model files (large)
-# models/*.onnx is tracked via git-lfs in production
+# Panel config (local state)
+.panel_config.json
+skills-lock.json
+
+# API key (auto-generated)
+.api_key
+
+# Training data
+Valuable photos/
+
+# Claude local settings
+.claude/
+.agents/
+
+# Large model files
+models/*.onnx
+models/*.pt
