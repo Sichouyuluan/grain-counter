@@ -13,6 +13,7 @@ import base64
 import subprocess
 import secrets
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -21,7 +22,6 @@ import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Header, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 import uvicorn
 
 from graincounter.config import load_config, get_config, set_config
@@ -30,6 +30,8 @@ from graincounter.rate_limiter import RateLimiter
 from graincounter.device_tracker import OnlineDeviceTracker
 from graincounter.detector import GrainDetector, draw_results
 from graincounter.valuable import ValuablePhotoSaver
+from graincounter.stats import detection_stats
+from graincounter.guard import ScanGuard, set_guard, get_guard
 
 # ============================================================
 #  初始化 — 配置 / 日志 / 全局对象
@@ -41,6 +43,7 @@ rate_limiter = RateLimiter(
     max_requests=get_config("rate_limit_per_minute", 60),
     window_seconds=60,
 )
+detect_rate_limiter = RateLimiter(max_requests=30, window_seconds=60)
 device_tracker = OnlineDeviceTracker(offline_threshold=30)
 detector = None
 api_key = None
@@ -56,7 +59,20 @@ async def lifespan(app: FastAPI):
         score_threshold=get_config("score_threshold", 0.25),
         nms_threshold=get_config("nms_threshold", 0.5),
     )
+    # GPU warm-up: 跑一次空推理激活 CUDA
+    logger.info("GPU 预热中...")
+    warm_img = np.zeros((640, 640, 3), dtype=np.uint8)
+    detector.detect(warm_img)
+    logger.info("GPU 预热完成")
     valuable_saver = ValuablePhotoSaver()
+    # 扫描保护
+    def _stop_uvicorn():
+        logger.error("[GUARD] 多次扫描攻击，停止服务...")
+        import os, signal
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    scan_guard = ScanGuard(stop_callback=_stop_uvicorn)
+    set_guard(scan_guard)
     api_key = _load_or_generate_api_key()
     logger.info(f"API Key: {api_key[:4]}...***PIN***")
     logger.info(f"服务启动: http://0.0.0.0:{get_config('port', 8000)}")
@@ -81,14 +97,14 @@ def _load_or_generate_api_key() -> str:
     return key
 
 
+detect_semaphore = asyncio.Semaphore(2)
+
 app = FastAPI(title="小麦籽粒检测", version="2.0.0", lifespan=lifespan)
 
 # 中间件
-if get_config("enable_response_compression", True):
-    app.add_middleware(GZipMiddleware, minimum_size=get_config("response_compress_min_size", 1000))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,24 +118,53 @@ async def verify_api_key(authorization: str = Header(None)):
     if not get_config("require_api_key", True):
         return
     if not authorization:
-        raise HTTPException(status_code=401, detail="需要 API Key")
+        raise HTTPException(status_code=401, detail={"error": True, "message": "需要 API Key", "code": 401})
     token = authorization.replace("Bearer ", "").strip()
     if not secrets.compare_digest(token, api_key):
-        raise HTTPException(status_code=403, detail="API Key 无效")
+        raise HTTPException(status_code=403, detail={"error": True, "message": "API Key 无效", "code": 403})
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     client_ip = request.client.host
+    # 解析 X-Forwarded-For 获取真实 IP
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        client_ip = xff.split(",")[0].strip()
     path = request.url.path
+
+    # 0. 扫描保护检查
+    guard = get_guard()
+    if guard and guard.is_protected():
+        remaining = guard.get_remaining_protect_seconds()
+        return JSONResponse(
+            status_code=503,
+            content={"error": f"服务器进入保护模式，请{remaining}秒后再试"},
+        )
 
     # 1. 踢出检查
     if path not in ("/api/online-devices", "/api/kick-device") and device_tracker.is_kicked(client_ip):
         return JSONResponse(status_code=403, content={"error": "你已被暂时移除，请5分钟后再试"})
 
-    # 2. 限速
-    if path not in ("/api/ping", "/api/online-devices", "/api/kick-device") and not rate_limiter.is_allowed(client_ip):
-        return JSONResponse(status_code=429, content={"error": "请求过于频繁，请稍后再试"})
+    # 2. 限速 + 封禁（跳过 ping / online-devices / kick-device）
+    if path not in ("/api/ping", "/api/online-devices", "/api/kick-device"):
+        # 2a. 封禁检查
+        if rate_limiter.is_banned(client_ip):
+            remaining = int(rate_limiter._banned.get(client_ip, 0) - time.time())
+            return JSONResponse(
+                status_code=403,
+                content={"error": f"你已被暂时封禁，请{remaining}秒后再试"},
+            )
+
+        # 2b. /api/detect 使用更严格的限制器（30 req/min）
+        if path == "/api/detect":
+            if not detect_rate_limiter.is_allowed(client_ip):
+                rate_limiter.record_rejection(client_ip)
+                return JSONResponse(status_code=429, content={"error": "请求过于频繁，请稍后再试"})
+        else:
+            if not rate_limiter.is_allowed(client_ip):
+                rate_limiter.record_rejection(client_ip)
+                return JSONResponse(status_code=429, content={"error": "请求过于频繁，请稍后再试"})
 
     # 3. 设备追踪（跳过 localhost）
     if client_ip not in ("127.0.0.1", "::1"):
@@ -127,6 +172,11 @@ async def rate_limit_middleware(request: Request, call_next):
         device_tracker.update_activity(client_ip, user_agent)
 
     response = await call_next(request)
+
+    # 记录到扫描防护
+    guard = get_guard()
+    if guard:
+        guard.check_and_record(client_ip, response.status_code, path)
 
     # 检测请求计数
     if path == "/api/detect" and client_ip not in ("127.0.0.1", "::1"):
@@ -151,6 +201,16 @@ async def index():
 # ============================================================
 #  API 路由
 # ============================================================
+@app.get("/api/config")
+async def public_config():
+    """返回前端需要的公开配置项"""
+    return {
+        "max_upload_mb": get_config("max_upload_mb", 10),
+        "auth_enabled": get_config("require_api_key", True),
+        "version": "2.0.0",
+    }
+
+
 @app.get("/api/health")
 async def health():
     return {
@@ -166,7 +226,7 @@ async def ping():
 
 
 @app.post("/api/toggle-auth")
-async def toggle_auth():
+async def toggle_auth(_: str = Depends(verify_api_key)):
     current = get_config("require_api_key", True)
     set_config("require_api_key", not current)
     state = "ON" if get_config("require_api_key") else "OFF"
@@ -175,7 +235,7 @@ async def toggle_auth():
 
 
 @app.get("/api/key")
-async def get_api_key():
+async def get_api_key(_: str = Depends(verify_api_key)):
     return {"key": api_key}
 
 
@@ -208,13 +268,13 @@ async def select_model(request: Request):
         data = {}
     model_name = data.get("model")
     if not model_name:
-        raise HTTPException(status_code=400, detail="需要指定 model 参数")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "需要指定 model 参数", "code": 400})
 
     from graincounter.config import get_project_root
     models_dir = os.path.join(get_project_root(), "models")
     model_path = os.path.join(models_dir, model_name)
     if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail=f"模型文件不存在: {model_name}")
+        raise HTTPException(status_code=404, detail={"error": True, "message": f"模型文件不存在: {model_name}", "code": 404})
 
     logger.info(f"切换模型: {model_name}")
     try:
@@ -226,21 +286,33 @@ async def select_model(request: Request):
         )
         detector = new_detector
         set_config("model_path", model_path)
+        # 持久化到 config.yaml
+        import yaml
+        config_path = os.path.join(get_project_root(), "config.yaml")
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        else:
+            cfg = {}
+        cfg["model_path"] = model_path
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, allow_unicode=True)
+        logger.info(f"Config written: model_path={model_path}")
         logger.info(f"模型切换成功: {model_name}")
         return {"ok": True, "model": model_name}
     except Exception as e:
         logger.error(f"模型切换失败: {e}")
-        raise HTTPException(status_code=500, detail=f"模型加载失败: {e}")
+        raise HTTPException(status_code=500, detail={"error": True, "message": f"模型加载失败: {e}", "code": 500})
 
 
 @app.get("/api/online-devices")
-async def online_devices():
+async def online_devices(_: str = Depends(verify_api_key)):
     devices = device_tracker.get_online_devices()
     return {"count": len(devices), "devices": devices}
 
 
 @app.post("/api/kick-device")
-async def kick_device(request: Request):
+async def kick_device(request: Request, _: str = Depends(verify_api_key)):
     try:
         body = await request.body()
         data = json.loads(body) if body else {}
@@ -248,7 +320,7 @@ async def kick_device(request: Request):
         data = {}
     target_ip = data.get("ip")
     if not target_ip:
-        raise HTTPException(status_code=400, detail="需要指定 ip 参数")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "需要指定 ip 参数", "code": 400})
     device_tracker.kick(target_ip)
     return {"ok": True, "message": f"设备 {target_ip} 已被移除，5分钟后自动恢复"}
 
@@ -259,23 +331,33 @@ async def detect_image(
     conf: float = Query(default=None, ge=0.01, le=1.0, description="置信度阈值"),
     iou: float = Query(default=None, ge=0.01, le=1.0, description="IoU阈值"),
     _: str = Depends(verify_api_key),
+    request: Request = None,
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="请上传图片文件")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "请上传图片文件", "code": 400})
 
     content = await file.read()
     max_bytes = get_config("max_upload_mb", 10) * 1024 * 1024
     if len(content) > max_bytes:
-        raise HTTPException(status_code=400, detail=f"文件过大，最大 {get_config('max_upload_mb')}MB")
+        raise HTTPException(status_code=400, detail={"error": True, "message": f"文件过大，最大 {get_config('max_upload_mb')}MB", "code": 400})
 
     nparr = np.frombuffer(content, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
-        raise HTTPException(status_code=400, detail="无法解析图片")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "无法解析图片", "code": 400})
 
-    t0 = time.perf_counter()
-    results = detector.detect(img, conf=conf, iou=iou)
-    elapsed = time.perf_counter() - t0
+    try:
+        async with detect_semaphore:
+            t0 = time.perf_counter()
+            results = detector.detect(img, conf=conf, iou=iou)
+            elapsed = time.perf_counter() - t0
+    except Exception:
+        detection_stats.record_error()
+        raise HTTPException(status_code=503, detail={"error": True, "message": "服务器繁忙，请稍后重试", "code": 503})
+
+    # 记录成功检测统计
+    if request:
+        detection_stats.record_success(client_ip=request.client.host)
 
     # 优质训练照片筛选
     saved_valuable = valuable_saver.check_and_save(img, results, filename=file.filename or "image.jpg")
@@ -346,12 +428,12 @@ async def save_image(
 ):
     """手动保存图片到优质照片目录（用于前端'识别不准'功能）"""
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="请上传图片文件")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "请上传图片文件", "code": 400})
     content = await file.read()
     nparr = np.frombuffer(content, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
-        raise HTTPException(status_code=400, detail="无法解析图片")
+        raise HTTPException(status_code=400, detail={"error": True, "message": "无法解析图片", "code": 400})
     vdir = get_config("valuable_dir", "Valuable photos")
     os.makedirs(vdir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -359,10 +441,20 @@ async def save_image(
     save_name = f"manual_{timestamp}{ext}"
     save_path = os.path.join(vdir, save_name)
     cv2.imwrite(save_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    valuable_saver._saved_count += 1
+    valuable_saver.increment_count()
     logger.info(f"[MANUAL_SAVE] {save_name}")
     return {"ok": True, "path": save_name}
 
+
+
+@app.get("/api/stats")
+async def detection_statistics():
+    """获取检测统计信息"""
+    stats = detection_stats.get_stats()
+    guard = get_guard()
+    if guard:
+        stats["guard"] = guard.get_stats()
+    return stats
 
 
 # ============================================================
@@ -402,5 +494,4 @@ if __name__ == "__main__":
     print(f"Model: {get_config('model_path')}")
     auth = "ON" if get_config("require_api_key") else "OFF"
     print(f"Auth: {auth}")
-    print(f"Response Compression: {'ON' if get_config('enable_response_compression') else 'OFF'}")
-    uvicorn.run(app, host=host, port=port, timeout_keep_alive=120)
+    uvicorn.run(app, host=host, port=port, timeout_keep_alive=120, timeout_graceful_shutdown=30)

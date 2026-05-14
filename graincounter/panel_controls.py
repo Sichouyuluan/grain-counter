@@ -377,3 +377,10 @@ class PanelControls:
             self._log(f"已打开: {vdir}", "SUCCESS")
         except Exception as e:
             self._log(f"打开失败: {e}", "ERROR")
+
+    def _open_models_dir(self):
+        mdir = os.path.join(self.project_dir, "models")
+        if not os.path.isdir(mdir):
+            os.makedirs(mdir, exist_ok=True)
+        subprocess.Popen(["explorer", mdir],
+                         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)

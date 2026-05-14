@@ -25,6 +25,10 @@ class ValuablePhotoSaver:
         with self._lock:
             return self._saved_count
 
+    def increment_count(self):
+        with self._lock:
+            self._saved_count += 1
+
     def reset_count(self):
         with self._lock:
             self._saved_count = 0

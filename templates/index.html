@@ -93,7 +93,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
   <div id="dropZone" class="upload-pulse border-2 border-dashed rounded-2xl py-12 md:py-16 px-6 text-center cursor-pointer transition-all duration-300 hover:bg-accent/5" onclick="document.getElementById('fileInput').click()">
     <div class="text-5xl mb-3 opacity-80">📷</div>
     <p class="text-lg font-medium text-white/90">点击上传 或 拖拽图片到此处</p>
-    <p class="text-sm text-dim mt-1">支持 JPG / PNG / BMP，最大 10MB</p>
+    <p class="text-sm text-dim mt-1" id="uploadHint">支持 JPG / PNG / BMP，最大 10MB</p>
     <p class="text-xs text-accent/80 mt-3 flex items-center justify-center gap-1">
       <span>💡</span> 也可 <kbd class="bg-surf-card px-1.5 py-0.5 rounded text-xs border border-surf-border">Ctrl+V</kbd> 粘贴图片
     </p>
@@ -335,6 +335,13 @@ function toast(msg,type){
 // ============================================================
 //  API Key
 // ============================================================
+// 从后端读取配置
+var maxUploadMB = 10;
+fetch('/api/config').then(function(r){return r.json()}).then(function(c){
+  maxUploadMB = c.max_upload_mb || 10;
+  if(c.auth_enabled === false){authDisabled = true;}
+  $('uploadHint').textContent = '支持 JPG / PNG / BMP，最大 '+maxUploadMB+'MB';
+}).catch(function(){});
 fetch('/api/health').then(function(r){return r.json()}).then(function(d){
   if(d.auth===false){authDisabled=true;$('keyBar').classList.add('hidden')}
   else{$('keyBar').classList.remove('hidden')}
@@ -366,7 +373,7 @@ dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('!
 
 function handleFile(f){
   if(!f.type.startsWith('image/')){toast('请上传图片文件','error');return}
-  if(f.size>10*1024*1024){toast('文件过大，最大 10MB','error');return}
+  if(f.size>maxUploadMB*1024*1024){toast('文件过大，最大 '+maxUploadMB+'MB','error');return}
   selectedFile=f;
   lastOriginalFile=f;
   $('detectBtn').disabled=false;

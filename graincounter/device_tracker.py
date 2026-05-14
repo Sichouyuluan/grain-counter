@@ -16,6 +16,7 @@ class OnlineDeviceTracker:
         self._kicked = {}
         self.offline_threshold = offline_threshold
         self.kick_duration = 300
+        self._last_cleanup = 0.0
 
     def update_activity(self, client_ip: str, user_agent: str = ""):
         now = time.time()
@@ -51,8 +52,25 @@ class OnlineDeviceTracker:
             self._kicked[client_ip] = time.time() + self.kick_duration
             logger.info(f"设备被踢出: {client_ip}，5分钟后自动恢复")
 
+    def _cleanup_offline(self):
+        """Remove devices that have been offline for more than offline_threshold * 20 seconds (default 600s = 10 min)."""
+        now = time.time()
+        threshold = self.offline_threshold * 20
+        with self._lock:
+            stale_ips = [
+                ip for ip, info in self._devices.items()
+                if now - info["last_seen"] > threshold
+            ]
+            for ip in stale_ips:
+                del self._devices[ip]
+        if stale_ips:
+            logger.info(f"清理了 {len(stale_ips)} 个离线设备")
+
     def get_online_devices(self) -> list:
         now = time.time()
+        if now - self._last_cleanup > 600:
+            self._cleanup_offline()
+            self._last_cleanup = now
         online = []
         with self._lock:
             for ip, info in self._devices.items():

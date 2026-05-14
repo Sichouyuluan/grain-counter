@@ -3,6 +3,7 @@ import os
 import sys
 import re
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 
@@ -25,12 +26,16 @@ class PinHidingFilter(logging.Filter):
 
 
 class UvicornSafeFilter(logging.Filter):
-    """修复 uvicorn access logger 的格式化崩溃（%s 参数缺失）"""
+    """修复 uvicorn access logger 的格式化崩溃"""
 
     def filter(self, record):
-        # 如果 msg 包含 %s 但 args 为空，清空 args 防止格式化错误
-        if hasattr(record, 'msg') and '%s' in str(record.msg) and not record.args:
-            record.args = ()
+        if not record.args:
+            msg = getattr(record, 'msg', '')
+            if isinstance(msg, str) and any(x in msg for x in ('%(client_addr)', '%(request_line)', '%(status_code)')):
+                # uvicorn access log 占位符，提供 5 个安全默认值
+                record.args = ('?', '?', 0, '-', 0)
+            elif '%s' in msg:
+                record.args = ()
         return True
 
 
@@ -63,10 +68,14 @@ def setup_logger(name="grain_web", log_dir=None, level=logging.INFO) -> logging.
     log_file = os.path.join(
         log_dir, f"grain_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     )
-    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh = RotatingFileHandler(log_file, encoding="utf-8", maxBytes=10*1024*1024, backupCount=5)
     fh.setLevel(level)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
+
+    # 给 grain_web logger 自身添加 API Key 脱敏过滤器
+    if not any(isinstance(f, PinHidingFilter) for f in logger.filters):
+        logger.addFilter(PinHidingFilter())
 
     # 给 uvicorn access log 添加脱敏 + 安全过滤器
     for _name in ("uvicorn.access", "uvicorn"):

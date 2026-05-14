@@ -271,6 +271,9 @@ class PanelUI:
 
         glass_button(row2, "切换", Theme.blue, self._switch_model,
                      font=(Theme.font, 8), padx=8, pady=2).pack(side=tk.LEFT)
+        glass_button(row2, "📂", Theme.surface_alt, self._open_models_dir,
+                     font=(Theme.font, 8), padx=6, pady=2,
+                     fg=Theme.text_dim).pack(side=tk.LEFT, padx=(4, 0))
         self.model_status_label = glass_label(row2, text="", font=(Theme.font, 8),
                                               fg=Theme.text_dim, bg=Theme.surface)
         self.model_status_label.pack(side=tk.LEFT, padx=(6, 0))
