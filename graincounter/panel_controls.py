@@ -13,6 +13,28 @@ from graincounter.theme import Theme
 class PanelControls:
     """服务器控制逻辑 mixin（由 ServerPanel 继承）"""
 
+    # ── 轮询退避 ──
+    _poll_failures: dict[str, int] = {}
+    _poll_base_intervals: dict[str, int] = {
+        "device_loop": 3000,
+        "valuable_stats": 5000,
+        "runtime_stats": 5000,
+    }
+
+    def _poll_backoff(self, key: str) -> int:
+        """计算退避间隔：连续失败 N 次 → min(2^N * base, 60000) ms，成功时重置"""
+        base = self._poll_base_intervals.get(key, 5000)
+        failures = self._poll_failures.get(key, 0)
+        if failures <= 1:
+            return base
+        return min(base * (2 ** (failures - 1)), 60000)
+
+    def _poll_record(self, key: str, success: bool):
+        if success:
+            self._poll_failures[key] = 0
+        else:
+            self._poll_failures[key] = self._poll_failures.get(key, 0) + 1
+
     # ── 服务器控制 ──
 
     def _start_server(self):
@@ -34,7 +56,19 @@ class PanelControls:
         if model_val and model_val not in ("加载中...", "无可用模型"):
             model_name = model_val.split(" (")[0] if " (" in model_val else model_val
             cmd.extend(["--model", model_name])
-        self._log(f"启动: {' '.join(cmd)}", "INFO")
+        # 脱敏：隐藏命令行中的 API Key
+        masked_cmd = []
+        skip_next = False
+        for arg in cmd:
+            if skip_next:
+                masked_cmd.append("***")
+                skip_next = False
+            elif arg == "--api-key":
+                masked_cmd.append(arg)
+                skip_next = True
+            else:
+                masked_cmd.append(arg)
+        self._log(f"启动: {' '.join(masked_cmd)}", "INFO")
         try:
             si = None
             if sys.platform == "win32":
@@ -52,6 +86,7 @@ class PanelControls:
             self.root.after(3000, self._start_device_loop)
             self.root.after(5000, self._poll_valuable_stats)
             self.root.after(4000, self._load_models)
+            self.root.after(4000, self._poll_runtime_stats)
         except Exception as e:
             self._log(f"启动失败: {e}", "ERROR")
 
@@ -119,15 +154,18 @@ class PanelControls:
             return
         port = self.port_var.get().strip()
         def fetch():
+            ok = False
             try:
                 url = f"http://localhost:{port}/api/online-devices"
                 with urllib.request.urlopen(url, timeout=3) as resp:
                     data = json.loads(resp.read().decode())
                     self._online_devices = data.get("devices", [])
                     self.root.after(0, lambda: self._update_device_count(data.get("count", 0)))
+                ok = True
             except Exception:
                 self._online_devices = []
                 self.root.after(0, lambda: self._update_device_count(0))
+            self._poll_record("device_loop", ok)
         threading.Thread(target=fetch, daemon=True).start()
 
     def _update_device_count(self, count):
@@ -136,7 +174,7 @@ class PanelControls:
 
     def _start_device_loop(self):
         self._refresh_online_devices()
-        self.root.after(3000, self._start_device_loop)
+        self.root.after(self._poll_backoff("device_loop"), self._start_device_loop)
 
     def _kick_device(self, ip):
         if not self.server_running:
@@ -347,23 +385,58 @@ class PanelControls:
 
     def _poll_valuable_stats(self):
         if not self.server_running:
-            self.root.after(5000, self._poll_valuable_stats)
+            self.root.after(self._poll_backoff("valuable_stats"), self._poll_valuable_stats)
             return
         port = self.port_var.get().strip()
         def fetch():
+            ok = False
             try:
                 url = f"http://localhost:{port}/api/valuable-stats"
                 with urllib.request.urlopen(url, timeout=3) as resp:
                     data = json.loads(resp.read().decode())
                     self.root.after(0, lambda: self._update_valuable_count(data.get("total_count", 0)))
+                ok = True
             except Exception:
                 pass
-            self.root.after(5000, self._poll_valuable_stats)
+            self._poll_record("valuable_stats", ok)
+            self.root.after(self._poll_backoff("valuable_stats"), self._poll_valuable_stats)
         threading.Thread(target=fetch, daemon=True).start()
 
     def _update_valuable_count(self, count):
         self._valuable_count = count
         self.valuable_count_label.config(text=f"{count} 张")
+
+    def _poll_runtime_stats(self):
+        """拉取 runtime stats 更新面板状态（带退避）"""
+        if not self.server_running:
+            self.root.after(self._poll_backoff("runtime_stats"), self._poll_runtime_stats)
+            return
+        port = self.port_var.get().strip()
+        def fetch():
+            ok = False
+            try:
+                url = f"http://localhost:{port}/api/stats"
+                with urllib.request.urlopen(url, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+                    gs = data.get("guard", {})
+                    self.root.after(0, lambda: self._update_runtime_labels(data, gs))
+                ok = True
+            except Exception:
+                pass
+            self._poll_record("runtime_stats", ok)
+            self.root.after(self._poll_backoff("runtime_stats"), self._poll_runtime_stats)
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _update_runtime_labels(self, stats, guard_stats):
+        # 扫描攻击
+        pc = guard_stats.get("protection_count", 0)
+        self.guard_label.config(text=f"扫描{pc}次", fg=Theme.red if pc > 0 else Theme.orange)
+        # 检测次数
+        dt = stats.get("today", 0)
+        self.detect_label.config(text=f"检测{dt}次")
+        # 错误
+        err = stats.get("errors", 0)
+        self.error_label.config(text=f"错误{err}", fg=Theme.red if err > 0 else Theme.text_dim)
 
     def _open_valuable_dir(self):
         vdir = os.path.join(self.project_dir, "Valuable photos")

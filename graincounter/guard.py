@@ -70,10 +70,12 @@ class ScanGuard:
 
     def get_stats(self) -> dict:
         with self._lock:
+            now = time.time()
+            protected = now < self._protected_until
             return {
                 "protection_count": self._protection_count,
-                "is_protected": self.is_protected(),
-                "remaining_seconds": self.get_remaining_protect_seconds(),
+                "is_protected": protected,
+                "remaining_seconds": max(0, int(self._protected_until - now)),
                 "window_size": len(self._window),
             }
 

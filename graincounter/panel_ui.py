@@ -278,6 +278,30 @@ class PanelUI:
                                               fg=Theme.text_dim, bg=Theme.surface)
         self.model_status_label.pack(side=tk.LEFT, padx=(6, 0))
 
+        # 运行统计 — 第三行
+        row3 = tk.Frame(card, bg=Theme.surface)
+        row3.pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        glass_label(row3, text="运行:", font=(Theme.font, 8),
+                    fg=Theme.text_dim, bg=Theme.surface).pack(side=tk.LEFT)
+        self.guard_label = glass_label(row3, text="扫描0次", font=(Theme.font, 8),
+                                       fg=Theme.orange, bg=Theme.surface)
+        self.guard_label.pack(side=tk.LEFT, padx=(4, 12))
+
+        glass_label(row3, text="|", font=(Theme.font, 8),
+                    fg=Theme.border_light, bg=Theme.surface).pack(side=tk.LEFT)
+
+        self.error_label = glass_label(row3, text="错误0", font=(Theme.font, 8),
+                                        fg=Theme.red, bg=Theme.surface)
+        self.error_label.pack(side=tk.LEFT, padx=(12, 12))
+
+        glass_label(row3, text="|", font=(Theme.font, 8),
+                    fg=Theme.border_light, bg=Theme.surface).pack(side=tk.LEFT)
+
+        self.detect_label = glass_label(row3, text="检测0次", font=(Theme.font, 8),
+                                         fg=Theme.accent, bg=Theme.surface)
+        self.detect_label.pack(side=tk.LEFT, padx=(12, 0))
+
         self._prev_port = self.port_var.get()
         self._prev_key = self.custom_key_var.get()
 

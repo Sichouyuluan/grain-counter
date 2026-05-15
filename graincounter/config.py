@@ -75,9 +75,29 @@ def get_config(key=None, default=None):
     return _CONFIG.get(key, default)
 
 
-def set_config(key, value):
-    """设置配置项（运行时热更新）"""
+def set_config(key, value, persist=False):
+    """设置配置项（运行时热更新），persist=True 时同步写入 YAML"""
     _CONFIG[key] = value
+    if persist:
+        _persist_config()
+
+
+def _persist_config():
+    """将当前内存配置写回 config.yaml"""
+    import yaml
+    config_path = get_config_path()
+    # 写入时使用相对路径（model_path 和 valuable_dir）
+    write_cfg = dict(_CONFIG)
+    project_root = get_project_root()
+    for rel_key in ("model_path", "valuable_dir"):
+        val = write_cfg.get(rel_key)
+        if val and os.path.isabs(val):
+            try:
+                write_cfg[rel_key] = os.path.relpath(val, project_root)
+            except ValueError:
+                pass
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(write_cfg, f, allow_unicode=True)
 
 
 def get_project_root():

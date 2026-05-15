@@ -8,16 +8,22 @@ from datetime import datetime
 
 
 class PinHidingFilter(logging.Filter):
-    """在日志中隐藏 API Key 片段"""
+    """在日志中隐藏 API Key / Token 片段"""
 
     _PATTERNS = [
-        re.compile(r'(key=)[A-Za-z0-9_-]{8,}', re.IGNORECASE),
-        re.compile(r'(Bearer\s+)[A-Za-z0-9_-]{8,}', re.IGNORECASE),
+        re.compile(r'(key=)[A-Za-z0-9_\-]{8,}', re.IGNORECASE),
+        re.compile(r'(Bearer\s+)[A-Za-z0-9_\-]{8,}', re.IGNORECASE),
+        re.compile(r'(--api-key\s+)[A-Za-z0-9_\-]{8,}', re.IGNORECASE),
+        re.compile(r'(api[_-]?key[=:]\s*)[A-Za-z0-9_\-]{8,}', re.IGNORECASE),
+        re.compile(r'(token[=:]\s*)[A-Za-z0-9_\-]{8,}', re.IGNORECASE),
     ]
+
+    _TRIGGER_WORDS = ("key", "bearer", "authorization", "token", "auth")
 
     def filter(self, record):
         msg = record.getMessage()
-        if "key" in msg.lower():
+        msg_lower = msg.lower()
+        if any(w in msg_lower for w in self._TRIGGER_WORDS):
             for pat in self._PATTERNS:
                 msg = pat.sub(r"\1***PIN***", msg)
             record.msg = msg
@@ -25,22 +31,30 @@ class PinHidingFilter(logging.Filter):
         return True
 
 
-class UvicornSafeFilter(logging.Filter):
-    """修复 uvicorn access logger 的格式化崩溃"""
-
-    def filter(self, record):
+class _SafeFormatMessageMixin:
+    """混合入 uvicorn AccessFormatter，截获空 args 崩溃"""
+    def formatMessage(self, record):
         if not record.args:
-            msg = getattr(record, 'msg', '')
-            if isinstance(msg, str) and any(x in msg for x in ('%(client_addr)', '%(request_line)', '%(status_code)')):
-                # uvicorn access log 占位符，提供 5 个安全默认值
-                record.args = ('?', '?', 0, '-', 0)
-            elif '%s' in msg:
-                record.args = ()
-        return True
+            record.args = ('-', '-', '-', '-', '-')
+        try:
+            return super().formatMessage(record)
+        except Exception:
+            return str(getattr(record, 'msg', ''))
 
 
 def setup_logger(name="grain_web", log_dir=None, level=logging.INFO) -> logging.Logger:
     """配置并返回 logger 实例"""
+    # Monkey-patch uvicorn 的 AccessFormatter 防止空 args 崩溃
+    try:
+        from uvicorn.logging import AccessFormatter
+        if not issubclass(AccessFormatter, _SafeFormatMessageMixin):
+            class SafeAccessFormatter(_SafeFormatMessageMixin, AccessFormatter):
+                pass
+            import uvicorn.logging
+            uvicorn.logging.AccessFormatter = SafeAccessFormatter
+    except Exception:
+        pass
+
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
@@ -77,13 +91,11 @@ def setup_logger(name="grain_web", log_dir=None, level=logging.INFO) -> logging.
     if not any(isinstance(f, PinHidingFilter) for f in logger.filters):
         logger.addFilter(PinHidingFilter())
 
-    # 给 uvicorn access log 添加脱敏 + 安全过滤器
+    # 给 uvicorn access log 添加脱敏过滤器
     for _name in ("uvicorn.access", "uvicorn"):
         _l = logging.getLogger(_name)
         if not any(isinstance(f, PinHidingFilter) for f in _l.filters):
             _l.addFilter(PinHidingFilter())
-        if not any(isinstance(f, UvicornSafeFilter) for f in _l.filters):
-            _l.addFilter(UvicornSafeFilter())
 
     return logger
 
