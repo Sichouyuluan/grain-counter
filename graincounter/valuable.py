@@ -73,7 +73,7 @@ class ValuablePhotoSaver:
         # 保存原图
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_name = os.path.splitext(filename)[0]
+            base_name = os.path.splitext(os.path.basename(filename))[0]
             save_name = f"{base_name}_{timestamp}.jpg"
             save_path = os.path.join(self._valuable_dir, save_name)
             cv2.imwrite(save_path, img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])

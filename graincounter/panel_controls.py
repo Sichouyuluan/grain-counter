@@ -13,6 +13,34 @@ from graincounter.theme import Theme
 class PanelControls:
     """服务器控制逻辑 mixin（由 ServerPanel 继承）"""
 
+    # ── API Key 辅助 ──
+    def _get_api_key(self) -> str | None:
+        """获取当前有效的 API Key"""
+        custom = self.custom_key_var.get().strip()
+        if custom:
+            return custom
+        key_file = os.path.join(self.project_dir, ".api_key")
+        if os.path.exists(key_file):
+            with open(key_file, "r") as f:
+                return f.read().strip()
+        return os.environ.get("GRAIN_API_KEY")
+
+    def _api_request(self, url, method="GET", data=None, timeout=3):
+        """发送带 API Key 的 HTTP 请求，返回 (status, body_dict_or_None)"""
+        headers = {"Content-Type": "application/json"}
+        key = self._get_api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        body = json.dumps(data).encode("utf-8") if data else None
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, None
+        except Exception:
+            return 0, None
+
     # ── 轮询退避 ──
     _poll_failures: dict[str, int] = {}
     _poll_base_intervals: dict[str, int] = {
@@ -155,14 +183,12 @@ class PanelControls:
         port = self.port_var.get().strip()
         def fetch():
             ok = False
-            try:
-                url = f"http://localhost:{port}/api/online-devices"
-                with urllib.request.urlopen(url, timeout=3) as resp:
-                    data = json.loads(resp.read().decode())
-                    self._online_devices = data.get("devices", [])
-                    self.root.after(0, lambda: self._update_device_count(data.get("count", 0)))
+            code, data = self._api_request(f"http://localhost:{port}/api/online-devices")
+            if code == 200 and data:
+                self._online_devices = data.get("devices", [])
+                self.root.after(0, lambda: self._update_device_count(data.get("count", 0)))
                 ok = True
-            except Exception:
+            else:
                 self._online_devices = []
                 self.root.after(0, lambda: self._update_device_count(0))
             self._poll_record("device_loop", ok)
@@ -181,17 +207,15 @@ class PanelControls:
             return
         port = self.port_var.get().strip()
         def run():
-            try:
-                url = f"http://localhost:{port}/api/kick-device"
-                data = json.dumps({"ip": ip}).encode("utf-8")
-                req = urllib.request.Request(url, data=data,
-                                             headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    if json.loads(resp.read().decode()).get("ok"):
-                        self.root.after(0, lambda: self._log(f"已踢出: {ip}", "WARNING"))
-                        self.root.after(0, self._refresh_online_devices)
-            except Exception as e:
-                self.root.after(0, lambda: self._log(f"踢出失败: {e}", "ERROR"))
+            code, r = self._api_request(
+                f"http://localhost:{port}/api/kick-device",
+                method="POST", data={"ip": ip},
+            )
+            if code == 200 and r and r.get("ok"):
+                self.root.after(0, lambda: self._log(f"已踢出: {ip}", "WARNING"))
+                self.root.after(0, self._refresh_online_devices)
+            else:
+                self.root.after(0, lambda: self._log(f"踢出失败", "ERROR"))
         threading.Thread(target=run, daemon=True).start()
 
     # ── 模型管理 ──
@@ -223,14 +247,10 @@ class PanelControls:
             return
         port = self.port_var.get().strip()
         def fetch():
-            try:
-                url = f"http://localhost:{port}/api/models"
-                with urllib.request.urlopen(url, timeout=3) as resp:
-                    data = json.loads(resp.read().decode())
-                    models = data.get("models", [])
-                    self.root.after(0, lambda: self._update_model_menu(models))
-            except Exception:
-                pass
+            code, data = self._api_request(f"http://localhost:{port}/api/models")
+            if code == 200 and data:
+                models = data.get("models", [])
+                self.root.after(0, lambda m=models: self._update_model_menu(m))
         threading.Thread(target=fetch, daemon=True).start()
 
     def _update_model_menu(self, models):
@@ -259,25 +279,17 @@ class PanelControls:
         self.model_status_label.config(text="切换中...", fg=Theme.orange)
         port = self.port_var.get().strip()
         def run():
-            try:
-                url = f"http://localhost:{port}/api/select-model"
-                data = json.dumps({"model": model_name}).encode("utf-8")
-                req = urllib.request.Request(url, data=data,
-                                             headers={"Content-Type": "application/json"},
-                                             method="POST")
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    r = json.loads(resp.read().decode())
-                    if r.get("ok"):
-                        self.root.after(0, lambda: self.model_status_label.config(
-                            text=f"已切换: {model_name}", fg=Theme.accent))
-                        self.root.after(0, lambda: self._log(f"模型已切换: {model_name}", "SUCCESS"))
-                    else:
-                        self.root.after(0, lambda: self.model_status_label.config(
-                            text="切换失败", fg=Theme.red))
-            except Exception as e:
+            code, r = self._api_request(
+                f"http://localhost:{port}/api/select-model",
+                method="POST", data={"model": model_name}, timeout=30,
+            )
+            if code == 200 and r and r.get("ok"):
+                self.root.after(0, lambda: self.model_status_label.config(
+                    text=f"已切换: {model_name}", fg=Theme.accent))
+                self.root.after(0, lambda: self._log(f"模型已切换: {model_name}", "SUCCESS"))
+            else:
                 self.root.after(0, lambda: self.model_status_label.config(
                     text="切换失败", fg=Theme.red))
-                self.root.after(0, lambda: self._log(f"模型切换失败: {e}", "ERROR"))
         threading.Thread(target=run, daemon=True).start()
 
     # ── 认证切换 ──
@@ -285,35 +297,28 @@ class PanelControls:
     def _toggle_auth_on_server(self, enable):
         port = self.port_var.get().strip()
         def run():
-            try:
-                url = f"http://localhost:{port}/api/toggle-auth"
-                req = urllib.request.Request(url, data=b"{}", method="POST",
-                                             headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    r = json.loads(resp.read().decode())
-                    if r.get("ok"):
-                        s = "ON" if r.get("auth") else "OFF"
-                        self.root.after(0, lambda: self._log(f"认证已切换: {s}（热切换）", "SUCCESS"))
-            except Exception as e:
-                self.root.after(0, lambda: self._log(f"认证切换失败: {e}", "ERROR"))
+            code, r = self._api_request(
+                f"http://localhost:{port}/api/toggle-auth", method="POST",
+            )
+            if code == 200 and r and r.get("ok"):
+                s = "ON" if r.get("auth") else "OFF"
+                self.root.after(0, lambda: self._log(f"认证已切换: {s}（热切换）", "SUCCESS"))
+            else:
+                self.root.after(0, lambda: self._log(f"认证切换失败", "ERROR"))
         threading.Thread(target=run, daemon=True).start()
 
     def _fetch_api_key(self):
         port = self.port_var.get().strip()
         def run():
-            try:
-                time.sleep(1.0)
-                hurl = f"http://localhost:{port}/api/health"
-                with urllib.request.urlopen(hurl, timeout=3) as resp:
-                    h = json.loads(resp.read().decode())
-                    if not h.get("auth", True):
-                        self.root.after(0, lambda: self._safe_pack_forget(self.key_frame))
-                        return
-                kurl = f"http://localhost:{port}/api/key"
-                with urllib.request.urlopen(kurl, timeout=3) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.root.after(0, lambda: self.key_var.set(data.get("key", "--")))
-            except Exception:
+            time.sleep(1.0)
+            code, h = self._api_request(f"http://localhost:{port}/api/health")
+            if code == 200 and h and not h.get("auth", True):
+                self.root.after(0, lambda: self._safe_pack_forget(self.key_frame))
+                return
+            code2, data = self._api_request(f"http://localhost:{port}/api/key")
+            if code2 == 200 and data:
+                self.root.after(0, lambda d=data: self.key_var.set(d.get("key", "--")))
+            else:
                 self.root.after(0, lambda: self.key_var.set("获取失败"))
         threading.Thread(target=run, daemon=True).start()
 
@@ -381,6 +386,55 @@ class PanelControls:
                 self.root.after(0, lambda: self._log(f"异常: {e}", "ERROR"))
         threading.Thread(target=run, daemon=True).start()
 
+    # ── 攻击详情 ──
+    def _show_attack_log(self):
+        """显示攻击日志弹窗"""
+        if not self.server_running:
+            self._show_toast("服务器未运行")
+            return
+        port = self.port_var.get().strip()
+
+        def fetch():
+            code, data = self._api_request(
+                f"http://localhost:{port}/api/attack-log?limit=30",
+            )
+            if code == 200 and data and data.get("events"):
+                lines = [f"保护触发: {data['protection_count']}次 | 最近攻击:"]
+                for e in data["events"]:
+                    lines.append(f"  {e['time']} | {e['ip']} | {e['status']} | {e['path']}")
+                self.root.after(0, lambda: self._show_attack_popup("\n".join(lines)))
+            else:
+                self.root.after(0, lambda: self._show_toast("暂无攻击记录"))
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _show_attack_popup(self, text):
+        import tkinter as tk
+        popup = tk.Toplevel(self.root)
+        popup.title("攻击详情")
+        popup.geometry("700x400")
+        popup.configure(bg=Theme.surface)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        frame = tk.Frame(popup, bg=Theme.surface)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        scroll = tk.Scrollbar(frame)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        txt = tk.Text(frame, font=("Consolas", 9), bg=Theme.surface_alt,
+                      fg="#e0e0e0", insertbackground="#fff",
+                      yscrollcommand=scroll.set, wrap=tk.NONE)
+        txt.insert("1.0", text)
+        txt.config(state=tk.DISABLED)
+        txt.pack(fill=tk.BOTH, expand=True)
+        scroll.config(command=txt.yview)
+
+        btn = tk.Button(popup, text="关闭", command=popup.destroy,
+                        bg=Theme.surface_alt, fg="#ccc", relief=tk.FLAT,
+                        font=(Theme.font, 10), padx=20, pady=4, cursor="hand2")
+        btn.pack(pady=(0, 8))
+
     # ── 优质照片 ──
 
     def _poll_valuable_stats(self):
@@ -390,14 +444,10 @@ class PanelControls:
         port = self.port_var.get().strip()
         def fetch():
             ok = False
-            try:
-                url = f"http://localhost:{port}/api/valuable-stats"
-                with urllib.request.urlopen(url, timeout=3) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.root.after(0, lambda: self._update_valuable_count(data.get("total_count", 0)))
+            code, data = self._api_request(f"http://localhost:{port}/api/valuable-stats")
+            if code == 200 and data:
+                self.root.after(0, lambda d=data: self._update_valuable_count(d.get("total_count", 0)))
                 ok = True
-            except Exception:
-                pass
             self._poll_record("valuable_stats", ok)
             self.root.after(self._poll_backoff("valuable_stats"), self._poll_valuable_stats)
         threading.Thread(target=fetch, daemon=True).start()
@@ -407,22 +457,18 @@ class PanelControls:
         self.valuable_count_label.config(text=f"{count} 张")
 
     def _poll_runtime_stats(self):
-        """拉取 runtime stats 更新面板状态（带退避）"""
+        """拉取 runtime stats 更新面板状态（带退避 + API Key）"""
         if not self.server_running:
             self.root.after(self._poll_backoff("runtime_stats"), self._poll_runtime_stats)
             return
         port = self.port_var.get().strip()
         def fetch():
             ok = False
-            try:
-                url = f"http://localhost:{port}/api/stats"
-                with urllib.request.urlopen(url, timeout=3) as resp:
-                    data = json.loads(resp.read().decode())
-                    gs = data.get("guard", {})
-                    self.root.after(0, lambda: self._update_runtime_labels(data, gs))
+            code, data = self._api_request(f"http://localhost:{port}/api/stats")
+            if code == 200 and data:
+                gs = data.get("guard", {})
+                self.root.after(0, lambda d=data, g=gs: self._update_runtime_labels(d, g))
                 ok = True
-            except Exception:
-                pass
             self._poll_record("runtime_stats", ok)
             self.root.after(self._poll_backoff("runtime_stats"), self._poll_runtime_stats)
         threading.Thread(target=fetch, daemon=True).start()

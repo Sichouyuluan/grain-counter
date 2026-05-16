@@ -4,11 +4,12 @@ import subprocess
 import sys
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
 from graincounter.config import get_config, set_config
 from graincounter.state import app_state
+from graincounter.middleware import verify_api_key
 
 logger = logging.getLogger("grain_web")
 router = APIRouter(tags=["pages"])
@@ -52,7 +53,7 @@ async def valuable_stats():
 
 
 @router.post("/api/valuable-toggle")
-async def valuable_toggle():
+async def valuable_toggle(_: str = Depends(verify_api_key)):
     current = get_config("valuable_enable", True)
     set_config("valuable_enable", not current)
     state = "开启" if get_config("valuable_enable") else "关闭"
@@ -61,13 +62,13 @@ async def valuable_toggle():
 
 
 @router.post("/api/valuable-reset")
-async def valuable_reset():
+async def valuable_reset(_: str = Depends(verify_api_key)):
     app_state.valuable_saver.reset_count()
     return {"ok": True, "saved_count": 0}
 
 
 @router.post("/api/valuable-open-dir")
-async def valuable_open_dir():
+async def valuable_open_dir(_: str = Depends(verify_api_key)):
     vdir = get_config("valuable_dir", "Valuable photos")
     abs_dir = os.path.abspath(vdir)
     if os.path.exists(abs_dir):

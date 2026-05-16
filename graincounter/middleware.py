@@ -22,9 +22,6 @@ async def verify_api_key(authorization: str = Header(None)):
 
 async def rate_limit_middleware(request: Request, call_next):
     client_ip = request.client.host
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        client_ip = xff.split(",")[0].strip()
     path = request.url.path
 
     # 0. 扫描保护检查（单次 get_stats 避免 TOCTOU）

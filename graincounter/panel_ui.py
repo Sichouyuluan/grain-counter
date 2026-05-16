@@ -302,6 +302,10 @@ class PanelUI:
                                          fg=Theme.accent, bg=Theme.surface)
         self.detect_label.pack(side=tk.LEFT, padx=(12, 0))
 
+        glass_button(row3, "🔍", Theme.surface_alt, self._show_attack_log,
+                     font=(Theme.font, 7), padx=4, pady=0,
+                     fg=Theme.text_dim).pack(side=tk.LEFT, padx=(8, 0))
+
         self._prev_port = self.port_var.get()
         self._prev_key = self.custom_key_var.get()
 

@@ -3,7 +3,7 @@ host: 0.0.0.0
 inference_timeout_seconds: 300
 input_size: 640
 max_upload_mb: 10
-model_path: models/grain_yolo26m_v1.onnx
+model_path: models\grain_yolo26m_v1.onnx
 nms_threshold: 0.5
 port: 8000
 rate_limit_per_minute: 60
@@ -12,7 +12,7 @@ response_compress_min_size: 1000
 score_threshold: 0.25
 upload_timeout_seconds: 120
 valuable_dir: Valuable photos
-valuable_enable: true
+valuable_enable: false
 valuable_low_ratio: 0.2
 valuable_low_threshold: 0.5
 valuable_very_low_ratio: 0.08

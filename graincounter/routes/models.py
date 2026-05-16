@@ -4,10 +4,11 @@ import json
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 
 from graincounter.config import get_config, set_config, get_project_root
 from graincounter.detector import GrainDetector
+from graincounter.middleware import verify_api_key
 from graincounter.state import app_state
 
 logger = logging.getLogger("grain_web")
@@ -31,7 +32,7 @@ async def list_models():
 
 
 @router.post("/api/select-model")
-async def select_model(request: Request):
+async def select_model(request: Request, _: str = Depends(verify_api_key)):
     try:
         body = await request.body()
         data = json.loads(body) if body else {}
@@ -40,6 +41,11 @@ async def select_model(request: Request):
     model_name = data.get("model")
     if not model_name:
         raise HTTPException(status_code=400, detail={"error": True, "message": "需要指定 model 参数", "code": 400})
+    # 路径遍历防护 + 扩展名白名单
+    if os.path.basename(model_name) != model_name:
+        raise HTTPException(status_code=400, detail={"error": True, "message": "无效的模型名称", "code": 400})
+    if not model_name.lower().endswith(".onnx"):
+        raise HTTPException(status_code=400, detail={"error": True, "message": "仅支持 .onnx 模型文件", "code": 400})
 
     models_dir = os.path.join(get_project_root(), "models")
     model_path = os.path.join(models_dir, model_name)

@@ -21,7 +21,7 @@ async def public_config():
     return {
         "max_upload_mb": get_config("max_upload_mb", 10),
         "auth_enabled": get_config("require_api_key", True),
-        "version": "2.0.0",
+        "version": "2.1.0",
     }
 
 
@@ -29,7 +29,7 @@ async def public_config():
 async def health():
     return {
         "status": "ok",
-        "model": get_config("model_path"),
+        "model": os.path.basename(get_config("model_path")),
         "auth": get_config("require_api_key", True),
     }
 
@@ -54,9 +54,23 @@ async def get_api_key(_: str = Depends(verify_api_key)):
 
 
 @router.get("/api/stats")
-async def detection_statistics():
+async def detection_statistics(_: str = Depends(verify_api_key)):
     stats = detection_stats.get_stats()
     guard = get_guard()
     if guard:
         stats["guard"] = guard.get_stats()
     return stats
+
+
+@router.get("/api/attack-log")
+async def attack_log(_: str = Depends(verify_api_key), limit: int = 50):
+    """返回最近的攻击事件详情（IP、时间、路径、状态码）"""
+    guard = get_guard()
+    if guard:
+        events = guard.get_recent_attacks(limit=limit)
+        return {
+            "events": events,
+            "count": len(events),
+            "protection_count": guard.get_stats()["protection_count"],
+        }
+    return {"events": [], "count": 0, "protection_count": 0}
