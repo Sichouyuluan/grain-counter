@@ -75,8 +75,10 @@ def test_web_server_import():
     """web_server imports without errors"""
     import web_server
     assert hasattr(web_server, 'app'), "Missing app"
-    assert hasattr(web_server, 'detect_semaphore'), "Missing detect_semaphore"
-    assert hasattr(web_server, 'detect_rate_limiter'), "Missing detect_rate_limiter"
+    from graincounter.routes.detect import detect_semaphore
+    assert detect_semaphore is not None
+    from graincounter.state import app_state
+    assert app_state.detect_rate_limiter is not None
     print("  [PASS] web_server imports")
 
 def test_web_server_config():

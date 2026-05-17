@@ -1,9 +1,10 @@
 """管理类 API — 配置、健康检查、认证、统计"""
 import os
 import json
+import secrets
 import logging
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from graincounter.config import get_config, set_config
@@ -53,6 +54,18 @@ async def get_api_key(_: str = Depends(verify_api_key)):
     return {"key": app_state.api_key}
 
 
+@router.post("/api/key/regenerate")
+async def regenerate_api_key(_: str = Depends(verify_api_key)):
+    from graincounter.config import get_project_root
+    new_key = secrets.token_urlsafe(32)
+    app_state.api_key = new_key
+    key_file = os.path.join(get_project_root(), ".api_key")
+    with open(key_file, "w") as f:
+        f.write(new_key)
+    logger.info(f"API Key regenerated: {new_key[:4]}...***PIN***")
+    return {"ok": True, "key": new_key}
+
+
 @router.get("/api/stats")
 async def detection_statistics(_: str = Depends(verify_api_key)):
     stats = detection_stats.get_stats()
@@ -74,3 +87,33 @@ async def attack_log(_: str = Depends(verify_api_key), limit: int = 50):
             "protection_count": guard.get_stats()["protection_count"],
         }
     return {"events": [], "count": 0, "protection_count": 0}
+
+
+@router.get("/api/scan-config")
+async def get_scan_config(_: str = Depends(verify_api_key)):
+    guard = get_guard()
+    if not guard:
+        return {"ok": False, "error": "ScanGuard not initialized"}
+    return {"ok": True, "config": guard.get_config()}
+
+
+@router.put("/api/scan-config")
+async def update_scan_config(request: Request, _: str = Depends(verify_api_key)):
+    try:
+        body = await request.body()
+        data = json.loads(body) if body else {}
+    except Exception:
+        data = {}
+    guard = get_guard()
+    if not guard:
+        raise HTTPException(status_code=503, detail="ScanGuard not initialized")
+    if "path_threshold" in data:
+        guard.path_threshold = int(data["path_threshold"])
+    if "flood_threshold" in data:
+        guard.flood_threshold = int(data["flood_threshold"])
+    if "protect_minutes" in data:
+        guard.protect_minutes = int(data["protect_minutes"])
+    if "stop_after" in data:
+        guard.stop_after = int(data["stop_after"])
+    logger.info(f"ScanGuard config updated: {data}")
+    return {"ok": True, "config": guard.get_config()}

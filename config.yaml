@@ -3,7 +3,7 @@ host: 0.0.0.0
 inference_timeout_seconds: 300
 input_size: 640
 max_upload_mb: 10
-model_path: models\grain_yolo26m_v1.onnx
+model_path: models\drygrain_yolo26m_v2.onnx
 nms_threshold: 0.5
 port: 8000
 rate_limit_per_minute: 60

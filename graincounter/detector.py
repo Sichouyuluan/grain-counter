@@ -32,7 +32,7 @@ class GrainDetector:
         logger.info(f"检测开始: img={w}x{h} conf={score} iou={nms}")
         t0 = time.perf_counter()
         results = self.model.predict(
-            img_bgr, conf=score, iou=nms, imgsz=self.input_size, verbose=False,
+            img_bgr, conf=score, iou=nms, imgsz=self.input_size, max_det=1000, verbose=False,
         )
         boxes = results[0].boxes
         elapsed = time.perf_counter() - t0

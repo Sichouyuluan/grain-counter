@@ -47,6 +47,7 @@ class PanelControls:
         "device_loop": 3000,
         "valuable_stats": 5000,
         "runtime_stats": 5000,
+        "warm_status": 5000,
     }
 
     def _poll_backoff(self, key: str) -> int:
@@ -102,10 +103,12 @@ class PanelControls:
             if sys.platform == "win32":
                 si = subprocess.STARTUPINFO()
                 si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            # 设置 PYTHONIOENCODING 避免 UTF-8 日志在 GBK 终端下乱码
+            server_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             self.server_process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
-                cwd=self.project_dir, startupinfo=si)
+                cwd=self.project_dir, startupinfo=si, env=server_env)
             self.server_running = True
             self._update_ui_state(True)
             self._log(f"PID={self.server_process.pid}", "SUCCESS")
@@ -115,14 +118,22 @@ class PanelControls:
             self.root.after(5000, self._poll_valuable_stats)
             self.root.after(4000, self._load_models)
             self.root.after(4000, self._poll_runtime_stats)
+            self.root.after(5000, self._poll_warm_status)
         except Exception as e:
             self._log(f"启动失败: {e}", "ERROR")
 
     def _read_log(self):
+        import re as _re
         try:
             for line in self.server_process.stdout:
                 line = line.rstrip()
-                if not line or "/api/ping" in line or "/api/health" in line:
+                # 剥离 ANSI 转义码，修复日志乱码
+                line = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
+                line = _re.sub(r'\x1b\]([0-9]+);.*?\x07', '', line)
+                if not line or any(x in line for x in (
+                    "/api/ping", "/api/health", "/api/stats",
+                    "/api/online-devices", "/api/valuable-stats", "/api/models",
+                )):
                     continue
                 if "[VALUABLE]" in line or "[MANUAL_SAVE]" in line:
                     lvl = "SAVE"
@@ -351,10 +362,14 @@ class PanelControls:
         if connected and ip:
             self.ts_status_dot.config(fg=Theme.accent)
             self.ts_url_var.set(f"http://{ip}:{port}")
+            if hasattr(self, 'ts_entry'):
+                self.ts_entry.config(fg=Theme.accent)
             self._log(f"Tailscale: {ip}", "SUCCESS")
         else:
             self.ts_status_dot.config(fg=Theme.red)
             self.ts_url_var.set(f"-- {status_text} --")
+            if hasattr(self, 'ts_entry'):
+                self.ts_entry.config(fg="#facc15")
 
     def _start_tailscale(self):
         def run():
@@ -476,7 +491,7 @@ class PanelControls:
     def _update_runtime_labels(self, stats, guard_stats):
         # 扫描攻击
         pc = guard_stats.get("protection_count", 0)
-        self.guard_label.config(text=f"扫描{pc}次", fg=Theme.red if pc > 0 else Theme.orange)
+        self.guard_label.config(text=f"触发{pc}次", fg=Theme.red if pc > 0 else Theme.orange)
         # 检测次数
         dt = stats.get("today", 0)
         self.detect_label.config(text=f"检测{dt}次")
@@ -503,3 +518,225 @@ class PanelControls:
             os.makedirs(mdir, exist_ok=True)
         subprocess.Popen(["explorer", mdir],
                          creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+
+    # ── API Key 刷新 ──
+
+    def _regenerate_api_key(self):
+        """重新生成 API Key（不依赖服务器运行状态）"""
+        import secrets
+        new_key = secrets.token_urlsafe(32)
+        key_file = os.path.join(self.project_dir, ".api_key")
+        with open(key_file, "w") as f:
+            f.write(new_key)
+        self.custom_key_var.set(new_key)
+        self.key_var.set(new_key)
+        self._prev_key = new_key
+        self._log("API Key 已重新生成", "SUCCESS")
+        self._show_toast("✅ 新 Key 已生成")
+        # 如果服务器在运行，同步到服务器
+        if self.server_running:
+            port = self.port_var.get().strip()
+            def run():
+                self._api_request(
+                    f"http://localhost:{port}/api/key/regenerate",
+                    method="POST",
+                )
+            threading.Thread(target=run, daemon=True).start()
+
+    # ── ScanGuard 防护配置 ──
+
+    def _on_scan_config_changed(self):
+        if not self.server_running:
+            return
+        if hasattr(self, '_scan_config_after_id') and self._scan_config_after_id:
+            self.root.after_cancel(self._scan_config_after_id)
+        self._scan_config_after_id = self.root.after(800, self._send_scan_config)
+
+    def _send_scan_config(self):
+        port = self.port_var.get().strip()
+        try:
+            seconds = int(self.protect_seconds_var.get())
+            config = {
+                "path_threshold": int(self.path_threshold_var.get()),
+                "flood_threshold": int(self.flood_threshold_var.get()),
+                "protect_minutes": max(1, seconds // 60),
+                "stop_after": int(self.stop_after_var.get()),
+            }
+        except ValueError:
+            return
+        def run():
+            code, data = self._api_request(
+                f"http://localhost:{port}/api/scan-config",
+                method="PUT", data=config,
+            )
+            if code == 200:
+                self.root.after(0, lambda: self._log("防护配置已更新", "INFO"))
+            else:
+                self.root.after(0, lambda: self._log("防护配置更新失败", "ERROR"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _reset_scan_config(self):
+        """恢复 ScanGuard 默认配置"""
+        self.path_threshold_var.set("15")
+        self.flood_threshold_var.set("50")
+        self.protect_seconds_var.set("180")
+        self.stop_after_var.set("5")
+        if self.server_running:
+            port = self.port_var.get().strip()
+            defaults = {"path_threshold": 15, "flood_threshold": 50, "protect_minutes": 3, "stop_after": 5}
+            def run():
+                self._api_request(
+                    f"http://localhost:{port}/api/scan-config",
+                    method="PUT", data=defaults,
+                )
+            threading.Thread(target=run, daemon=True).start()
+        self._log("防护配置已恢复默认", "INFO")
+
+    # ── Cloudflared ──
+
+    def _detect_cloudflared(self):
+        # 先检查进程状态
+        online = (hasattr(self, 'cloudflared_process') and self.cloudflared_process is not None
+                  and self.cloudflared_process.poll() is None)
+        if online:
+            # 进程在运行，但连接可能尚未建立
+            self.cf_status_dot.config(fg="#facc15")  # 黄色 = 启动中
+            self.cf_url_var.set("连接中...")
+        else:
+            self._set_cf(False, "未运行")
+        # 后台检查 tunnel list
+        def run():
+            try:
+                r = subprocess.run(["cloudflared", "tunnel", "list"],
+                                   capture_output=True, text=True, timeout=10,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                if r.returncode == 0 and "grain-counter" in r.stdout:
+                    connected = "connected" in r.stdout.lower() or "running" in r.stdout.lower()
+                    self.root.after(0, lambda: self._set_cf(connected, "已连接" if connected else "已断开"))
+                else:
+                    self.root.after(0, lambda: self._set_cf(False, "未安装"))
+            except FileNotFoundError:
+                self.root.after(0, lambda: self._set_cf(False, "未安装"))
+            except Exception:
+                self.root.after(0, lambda: self._set_cf(False, "检测失败"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _set_cf(self, online, status_text):
+        color = Theme.accent if online else Theme.red
+        self.cf_status_dot.config(fg=color)
+        if hasattr(self, 'cf_address_dot') and self.cf_address_dot:
+            self.cf_address_dot.config(fg=color)
+        entry_color = Theme.accent if online else "#facc15"
+        self.cf_url_var.set("{tunnel_url}" if online else f"-- {status_text} --")
+        if hasattr(self, 'cf_entry'):
+            self.cf_entry.config(fg=entry_color)
+        if online:
+            self._log("Cloudflared: {tunnel_url}", "SUCCESS")
+
+    def _start_cloudflared(self):
+        def run():
+            self.root.after(0, lambda: self._log("启动 Cloudflared 隧道...", "INFO"))
+            try:
+                proc = subprocess.Popen(
+                    ["cloudflared", "tunnel", "run", "grain-counter"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+                self.cloudflared_process = proc
+                self.root.after(0, lambda: self._log(f"Cloudflared PID={proc.pid}", "SUCCESS"))
+                self._detect_cloudflared()
+                threading.Thread(target=self._read_cloudflared_logs, daemon=True).start()
+            except Exception as e:
+                self.root.after(0, lambda: self._log(f"Cloudflared 启动异常: {e}", "ERROR"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _read_cloudflared_logs(self):
+        import re as _re
+        try:
+            for line in self.cloudflared_process.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
+                clean = _re.sub(r'\x1b\]([0-9]+);.*?\x07', '', clean)
+                # 检测连接成功 → 更新状态指示灯
+                if "Registered tunnel connection" in clean:
+                    self.root.after(0, lambda: self._set_cf(True, "已连接"))
+                # 内容分级：异常行用 WARNING/ERROR，正常行用 CLOUDFLARE
+                upper = clean.upper()
+                if " ERR " in upper or " ERROR " in upper or "FAILED" in upper:
+                    lvl = "ERROR"
+                elif " WRN " in upper or " WARNING " in upper:
+                    lvl = "WARNING"
+                else:
+                    lvl = "CLOUDFLARE"
+                self.root.after(0, lambda c=clean, l=lvl: self._log(c, l))
+        except Exception:
+            pass
+        finally:
+            self.root.after(0, lambda: self._log("Cloudflared 隧道已断开", "WARNING"))
+
+    def _stop_cloudflared(self):
+        def run():
+            self.root.after(0, lambda: self._log("停止 Cloudflared 隧道...", "WARNING"))
+            try:
+                if hasattr(self, 'cloudflared_process') and self.cloudflared_process:
+                    pid = self.cloudflared_process.pid
+                    # Windows: taskkill /F /T 强制杀死进程树（含子进程）
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True, timeout=10,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                        # 补刀：杀死所有残留 cloudflared.exe 进程
+                        subprocess.run(
+                            ["taskkill", "/F", "/IM", "cloudflared.exe"],
+                            capture_output=True, timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                    else:
+                        self.cloudflared_process.terminate()
+                        try:
+                            self.cloudflared_process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            self.cloudflared_process.kill()
+                    self.cloudflared_process = None
+                else:
+                    # 无进程句柄时直接杀所有 cloudflared
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["taskkill", "/F", "/IM", "cloudflared.exe"],
+                            capture_output=True, timeout=5,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                # 直接设置状态为已断开，不依赖 cloudflared tunnel list 的延迟反馈
+                self.root.after(0, lambda: self._set_cf(False, "已停止"))
+                self.root.after(0, lambda: self._log("Cloudflared 已停止", "SUCCESS"))
+            except Exception as e:
+                self.root.after(0, lambda: self._log(f"Cloudflared 停止异常: {e}", "ERROR"))
+        threading.Thread(target=run, daemon=True).start()
+
+    # ── 预热状态轮询 ──
+
+    def _poll_warm_status(self):
+        if not self.server_running:
+            self.root.after(self._poll_backoff("warm_status"), self._poll_warm_status)
+            return
+        port = self.port_var.get().strip()
+        def fetch():
+            ok = False
+            code, data = self._api_request(f"http://localhost:{port}/api/models/warm-status")
+            if code == 200 and data:
+                models = data.get("models", {})
+                warm_names = []
+                for n, s in models.items():
+                    if s.get("warm") and not s.get("is_main"):
+                        warm_names.append(n)
+                display = ", ".join(warm_names) if warm_names else "无"
+                self.root.after(0, lambda d=display: self.warm_status_label.config(text=d))
+                ok = True
+            self._poll_record("warm_status", ok)
+            self.root.after(self._poll_backoff("warm_status"), self._poll_warm_status)
+        threading.Thread(target=fetch, daemon=True).start()

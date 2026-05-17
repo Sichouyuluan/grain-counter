@@ -38,7 +38,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .mr-1{margin-right:0.25rem}.ml-1{margin-left:0.25rem}
 /* Typography */
 .text-xs{font-size:0.75rem}.text-sm{font-size:0.875rem}.text-base{font-size:1rem}
-.text-lg{font-size:1.125rem}.text-2xl{font-size:1.5rem}.text-3xl{font-size:1.875rem}.text-5xl{font-size:3rem}
+.text-lg{font-size:1.125rem}.text-xl{font-size:1.25rem}.text-2xl{font-size:1.5rem}.text-3xl{font-size:1.875rem}.text-5xl{font-size:3rem}
 .font-bold{font-weight:700}.font-semibold{font-weight:600}.font-medium{font-weight:500}
 .text-center{text-align:center}.text-left{text-align:left}.text-right{text-align:right}
 .leading-none{line-height:1}.break-all{word-break:break-all}
@@ -49,7 +49,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .bg-surf-card{background:#1a1d27}.bg-surf{background:#0f1117}.bg-\[\#0f1117\]{background:#0f1117}
 .bg-accent{background:#4ade80}.bg-danger{background:#f87171}.bg-danger\/90{background:rgba(248,113,113,.9)}
 .bg-orange-500\/20{background:rgba(249,115,22,.2)}
-.bg-accent\/5{background:rgba(74,222,128,.05)}.bg-warn{background:#facc15}
+.bg-accent\/5{background:rgba(74,222,128,.05)}.bg-accent\/60{background:rgba(74,222,128,.6)}.bg-warn{background:#facc15}
 .bg-gradient-to-t{background-image:linear-gradient(to top,var(--tw-gradient-stops))}
 .from-black\/60{--tw-gradient-from:rgba(0,0,0,.6);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to,transparent)}
 .to-transparent{--tw-gradient-to:transparent}
@@ -144,6 +144,9 @@ details.adv-settings>summary:hover{color:#e2e8f0}
 details.adv-settings .slider-group{padding:0 1rem 0.875rem}
 /* border-3 for loading spinner */
 .border-3{border-width:3px}
+.warm-list{font-size:11px;color:#8892a6;margin-top:4px;line-height:1.5}
+.warm-list .main{color:#4ade80}
+.warm-list .secondary{color:#8892a6}
 </style>
 </head>
 <body>
@@ -227,7 +230,7 @@ details.adv-settings .slider-group{padding:0 1rem 0.875rem}
         <div class="text-xs text-dim mt-1">⚡ 耗时 (ms)</div>
       </div>
       <div class="bg-surf-card border border-surf-border rounded-xl p-4 text-center">
-        <div class="text-3xl md:text-3xl text-lg font-bold text-accent break-all" id="sizeNum">0</div>
+        <div class="text-xl md:text-2xl font-bold text-accent" id="sizeNum" style="word-break:keep-all;overflow-wrap:break-word">0</div>
         <div class="text-xs text-dim mt-1">📐 尺寸</div>
       </div>
     </div>
@@ -291,6 +294,7 @@ details.adv-settings .slider-group{padding:0 1rem 0.875rem}
                 class="w-full bg-surf-card border border-surf-border text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-accent/50 cursor-pointer">
           <option value="">加载中...</option>
         </select>
+        <div id="warmStatus" class="warm-list"></div>
       </div>
     </div>
   </details>
@@ -754,12 +758,28 @@ function loadModels(){
     var cur=d.models.find(function(m){return m.active});
     $('modelStatus').textContent=cur?'当前: '+cur.name:'未选择'
   }).catch(function(){$('modelStatus').textContent='获取失败'})
+  // Also fetch warm status
+  fetch('/api/models/warm-status',{
+    headers:!authDisabled&&apiKey?{'Authorization':'Bearer '+apiKey}:{}
+  }).then(function(r){return r.json()}).then(function(ws){
+    if(!ws.ok)return;
+    var html='';var count=0;
+    for(var name in ws.models){
+      var m=ws.models[name];
+      if(!m.warm)continue;count++;
+      var cls=m.is_main?'main':'secondary';
+      html+='<span class="'+cls+'">'+(m.is_main?'★ ':'')+name+'</span>';
+    }
+    $('warmStatus').innerHTML=count>0?html:'无预热模型';
+  }).catch(function(){});
 }
 
 function switchModel(name){
   if(!name)return;$('modelStatus').textContent='切换中...';
+  var headers={'Content-Type':'application/json'};
+  if(!authDisabled&&apiKey)headers['Authorization']='Bearer '+apiKey;
   var fd=JSON.stringify({model:name});
-  fetch('/api/select-model',{method:'POST',headers:{'Content-Type':'application/json'},body:fd})
+  fetch('/api/select-model',{method:'POST',headers:headers,body:fd})
   .then(function(r){return r.json()}).then(function(d){
     if(d.ok){$('modelStatus').textContent='已切换: '+name;toast('模型已切换: '+name,'success');loadModels()}
     else{$('modelStatus').textContent='切换失败';toast('模型切换失败','error')}

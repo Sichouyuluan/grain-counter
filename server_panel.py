@@ -43,6 +43,9 @@ class ServerPanel(PanelUI, PanelControls):
         self.tailscale_ip: str | None = None
         self.tailscale_online = False
 
+        # Cloudflared
+        self.cloudflared_process: subprocess.Popen | None = None
+
         # 在线设备
         self._online_devices: list[dict] = []
         self._dropdown_open = False
@@ -72,6 +75,7 @@ class ServerPanel(PanelUI, PanelControls):
         self._config_model_path = self._read_config_model_path()
         self.scan_models_dir()  # 来自 PanelControls
         self._detect_tailscale()  # 来自 PanelControls
+        self._detect_cloudflared()  # 来自 PanelControls
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ═══════════════════════════════════════════

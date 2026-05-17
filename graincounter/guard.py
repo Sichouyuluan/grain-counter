@@ -101,6 +101,60 @@ class ScanGuard:
                 "trigger_reason": self._trigger_reason,
             }
 
+    # ── Dynamic config setters/getters ──
+
+    @property
+    def path_threshold(self):
+        with self._lock:
+            return self._path_threshold
+
+    @path_threshold.setter
+    def path_threshold(self, value):
+        with self._lock:
+            self._path_threshold = int(value)
+
+    @property
+    def flood_threshold(self):
+        with self._lock:
+            return self._flood_threshold
+
+    @flood_threshold.setter
+    def flood_threshold(self, value):
+        with self._lock:
+            self._flood_threshold = int(value)
+
+    @property
+    def protect_minutes(self):
+        with self._lock:
+            return self._protect_seconds // 60
+
+    @protect_minutes.setter
+    def protect_minutes(self, value):
+        with self._lock:
+            self._protect_seconds = int(value) * 60
+
+    @property
+    def stop_after(self):
+        with self._lock:
+            return self._stop_after
+
+    @stop_after.setter
+    def stop_after(self, value):
+        with self._lock:
+            self._stop_after = int(value)
+
+    def get_config(self) -> dict:
+        with self._lock:
+            return {
+                "path_threshold": self._path_threshold,
+                "flood_threshold": self._flood_threshold,
+                "protect_minutes": self._protect_seconds // 60,
+                "stop_after": self._stop_after,
+                "protection_count": self._protection_count,
+                "is_protected": time.time() < self._protected_until,
+                "remaining_seconds": max(0, int(self._protected_until - time.time())),
+            }
+
     def get_recent_attacks(self, limit=50) -> list[dict]:
         """返回最近异常事件的详细信息（用于面板攻击详情展示）"""
         with self._lock:

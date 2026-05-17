@@ -64,8 +64,24 @@ async def lifespan(app: FastAPI):
     set_guard(ScanGuard(stop_callback=_stop_uvicorn))
     app_state.api_key = _load_or_generate_api_key()
     logger.info(f"API Key: {app_state.api_key[:4]}...***PIN***")
+
+    # Set main model name for warm management
+    app_state._main_model_name = os.path.basename(get_config("model_path"))
+
+    # Start background warm model cleanup task
+    async def _warm_model_cleanup():
+        while True:
+            await asyncio.sleep(60)
+            stale = app_state.get_stale_warm_models(max_age_seconds=300)
+            for name in stale:
+                logger.info(f"[WARM] Cleaning stale warm model: {name}")
+                app_state.remove_warm_model(name)
+
+    cleanup_task = asyncio.create_task(_warm_model_cleanup())
+
     logger.info(f"服务启动: http://0.0.0.0:{get_config('port', 8000)}")
     yield
+    cleanup_task.cancel()
     logger.info("服务关闭")
 
 
