@@ -319,11 +319,26 @@ class ServerPanel(PanelUI, PanelControls):
             if messagebox.askyesno("确认退出",
                                    "服务器正在运行，关闭面板将停止服务器。\n确定退出？"):
                 self._stop_server()  # 来自 PanelControls
+                self._stop_cloudflared()
                 self.root.destroy()
         else:
             self.root.destroy()
+        # Cleanup PID
+        try:
+            pid_path = os.path.join(self.project_dir, ".panel_pid")
+            if os.path.exists(pid_path):
+                os.remove(pid_path)
+        except Exception:
+            pass
 
-    def run(self):
+    def run(self, auto_start=False):
+        # Write PID file for grainoff
+        pid_path = os.path.join(self.project_dir, ".panel_pid")
+        try:
+            with open(pid_path, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
         try:
             lp = os.path.join(self.project_dir, "server_panel.log")
             with open(lp, "a", encoding="utf-8") as f:
@@ -331,11 +346,27 @@ class ServerPanel(PanelUI, PanelControls):
         except Exception:
             pass
         self._log("管理面板已启动", "INFO")
-        self._log("点击 [▶ 启动] 开始 Web 服务器", "INFO")
         self.root.deiconify()
         self.root.after(2000, self._check_loop)
+        if auto_start:
+            self.root.after(800, self._auto_start_all)
         self.root.mainloop()
+        # Cleanup PID on exit
+        try:
+            if os.path.exists(pid_path):
+                os.remove(pid_path)
+        except Exception:
+            pass
+
+    def _auto_start_all(self):
+        self._log("自动启动模式: 启动服务器 + Cloudflared", "INFO")
+        self._start_server()
+        self.root.after(5000, self._start_cloudflared)
 
 
 if __name__ == "__main__":
-    ServerPanel().run()
+    import argparse
+    parser = argparse.ArgumentParser(description="Grain Counter 服务器管理面板")
+    parser.add_argument("--auto-start", action="store_true", help="自动启动服务器和 Cloudflared 隧道")
+    args = parser.parse_args()
+    ServerPanel().run(auto_start=args.auto_start)
