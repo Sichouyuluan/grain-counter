@@ -93,7 +93,7 @@ def _persist_config():
         val = write_cfg.get(rel_key)
         if val and os.path.isabs(val):
             try:
-                write_cfg[rel_key] = os.path.relpath(val, project_root)
+                write_cfg[rel_key] = os.path.relpath(val, project_root).replace(os.sep, "/")
             except ValueError:
                 pass
     with open(config_path, "w", encoding="utf-8") as f:

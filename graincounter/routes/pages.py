@@ -72,6 +72,12 @@ async def valuable_open_dir(_: str = Depends(verify_api_key)):
     vdir = get_config("valuable_dir", "Valuable photos")
     abs_dir = os.path.abspath(vdir)
     if os.path.exists(abs_dir):
-        subprocess.Popen(["explorer", abs_dir], creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+        if sys.platform == "win32":
+        cmd = ["explorer", abs_dir]
+    elif sys.platform == "darwin":
+        cmd = ["open", abs_dir]
+    else:
+        cmd = ["xdg-open", abs_dir]
+    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         return {"ok": True, "dir": abs_dir}
     return {"ok": False, "error": "目录不存在"}

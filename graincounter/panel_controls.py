@@ -506,8 +506,13 @@ class PanelControls:
         except FileExistsError:
             pass
         try:
-            subprocess.Popen(["explorer", vdir],
-                             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            if sys.platform == "win32":
+                cmd = ["explorer", vdir]
+            elif sys.platform == "darwin":
+                cmd = ["open", vdir]
+            else:
+                cmd = ["xdg-open", vdir]
+            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
             self._log(f"已打开: {vdir}", "SUCCESS")
         except Exception as e:
             self._log(f"打开失败: {e}", "ERROR")
@@ -516,8 +521,13 @@ class PanelControls:
         mdir = os.path.join(self.project_dir, "models")
         if not os.path.isdir(mdir):
             os.makedirs(mdir, exist_ok=True)
-        subprocess.Popen(["explorer", mdir],
-                         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+        if sys.platform == "win32":
+            cmd = ["explorer", mdir]
+        elif sys.platform == "darwin":
+            cmd = ["open", mdir]
+        else:
+            cmd = ["xdg-open", mdir]
+        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
 
     # ── API Key 刷新 ──
 
@@ -627,11 +637,14 @@ class PanelControls:
         if hasattr(self, 'cf_address_dot') and self.cf_address_dot:
             self.cf_address_dot.config(fg=color)
         entry_color = Theme.accent if online else "#facc15"
-        self.cf_url_var.set("{tunnel_url}" if online else f"-- {status_text} --")
+                tunnel = self._config.get("tunnel_url", "")
+        self.cf_url_var.set(tunnel if online and tunnel else f"-- {status_text} --")
         if hasattr(self, 'cf_entry'):
             self.cf_entry.config(fg=entry_color)
         if online:
-            self._log("Cloudflared: {tunnel_url}", "SUCCESS")
+            tunnel_url = self._config.get("tunnel_url", "")
+        if tunnel_url:
+            self._log(f"Cloudflared: {tunnel_url}", "SUCCESS")
 
     def _start_cloudflared(self):
         def run():

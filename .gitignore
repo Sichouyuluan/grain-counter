@@ -28,6 +28,8 @@ node_modules/
 
 # Panel config (local state)
 .panel_config.json
+.panel_pid
+server_panel.log
 skills-lock.json
 
 # API key (auto-generated)
@@ -39,6 +41,16 @@ Valuable photos/
 # Claude local settings
 .claude/
 .agents/
+
+# Screenshots
+screenshot*.png
+
+# Temporary test directories
+agent-harness/
+atrouble/
+
+# Archive
+all_skills.zip
 
 # Large model files
 models/*.onnx

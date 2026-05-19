@@ -1,4 +1,3 @@
-<!-- 用户全局规则（[USER_HOME]\.claude\CLAUDE.md）— 优先执行 -->
 # CLAUDE.md — Karpathy 12 Rules
 
 These rules apply to every task in this project unless explicitly overridden.
