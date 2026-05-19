@@ -26,9 +26,14 @@ Thumbs.db
 # Project specific
 node_modules/
 
+# Local config override (personal settings)
+config.local.yaml
+
 # Panel config (local state)
 .panel_config.json
 .panel_pid
+.server_pid
+.server_urls
 server_panel.log
 skills-lock.json
 
@@ -46,7 +51,6 @@ Valuable photos/
 screenshot*.png
 
 # Temporary test directories
-agent-harness/
 atrouble/
 
 # Archive

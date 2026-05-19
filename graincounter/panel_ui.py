@@ -212,6 +212,7 @@ class PanelUI:
         _, self.ts_entry = make_addr_row(addr_frame, "🌐", "Tailscale",
                                          self.ts_url_var, "#facc15")
         self.cf_url_var = tk.StringVar(value="检测中...")
+        self._cf_tunnel_url = ""  # 从 config.yaml 或 cloudflared 日志动态获取
         self.cf_address_dot, self.cf_entry = make_addr_row(addr_frame, "  ", "Cloudflared",
                                                            self.cf_url_var, "#facc15")
 

@@ -19,7 +19,7 @@ def get_config_path():
 DEFAULT_CONFIG = {
     "host": "0.0.0.0",
     "port": 8000,
-    "model_path": "models/grain_v8m_v10.onnx",
+    "model_path": "models/drygrain_yolo26m_v2.onnx",
     "input_size": 640,
     "score_threshold": 0.25,
     "nms_threshold": 0.5,
@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "upload_timeout_seconds": 120,
     "inference_timeout_seconds": 300,
     "enable_response_compression": True,
+    "tunnel_url": "",
 }
 
 

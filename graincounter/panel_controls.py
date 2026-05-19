@@ -1,11 +1,13 @@
 """服务器管理面板 — 服务器控制、设备管理、模型切换、Tailscale"""
 import json
 import os
+import re as _re
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import yaml
 
 from graincounter.theme import Theme
 
@@ -604,6 +606,42 @@ class PanelControls:
 
     # ── Cloudflared ──
 
+    def _load_cf_tunnel_url(self):
+        """自动获取隧道 URL，优先级：
+        1. cloudflared config.yml 的 hostname（自动，任何电脑都能用）
+        2. cloudflared 日志里的 quick tunnel URL（trycloudflare.com）
+        3. config.local.yaml / config.yaml（手动配置）
+        """
+        if self._cf_tunnel_url:
+            return
+        try:
+            # 1. 从 cloudflared 配置读取命名隧道 hostname
+            cf_config = os.path.join(os.path.expanduser("~"), ".cloudflared", "config.yml")
+            if os.path.exists(cf_config):
+                with open(cf_config, "r", encoding="utf-8") as f:
+                    cfc = yaml.safe_load(f) or {}
+                ingress = cfc.get("ingress", [])
+                for rule in ingress:
+                    hostname = rule.get("hostname", "")
+                    if hostname:
+                        self._cf_tunnel_url = f"https://{hostname}"
+                        return
+        except Exception:
+            pass
+        try:
+            # 2. 从项目配置文件读取
+            for fname in ("config.local.yaml", "config.yaml"):
+                config_path = os.path.join(self.project_dir, fname)
+                if os.path.exists(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f) or {}
+                    url = cfg.get("tunnel_url", "")
+                    if url:
+                        self._cf_tunnel_url = url
+                        return
+        except Exception:
+            pass
+
     def _detect_cloudflared(self):
         # 先检查进程状态
         online = (hasattr(self, 'cloudflared_process') and self.cloudflared_process is not None
@@ -614,9 +652,10 @@ class PanelControls:
             self.cf_url_var.set("连接中...")
         else:
             self._set_cf(False, "未运行")
-        # 后台检查 tunnel list
+        # 后台检查 tunnel list + 加载配置URL
         def run():
             try:
+                self._load_cf_tunnel_url()
                 r = subprocess.run(["cloudflared", "tunnel", "list"],
                                    capture_output=True, text=True, timeout=10,
                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
@@ -637,14 +676,16 @@ class PanelControls:
         if hasattr(self, 'cf_address_dot') and self.cf_address_dot:
             self.cf_address_dot.config(fg=color)
         entry_color = Theme.accent if online else "#facc15"
-                tunnel = self._config.get("tunnel_url", "")
-        self.cf_url_var.set(tunnel if online and tunnel else f"-- {status_text} --")
+        # 优先显示 tunnel_url，没有则显示状态文本
+        display = self._cf_tunnel_url if online and self._cf_tunnel_url else f"-- {status_text} --"
+        self.cf_url_var.set(display)
         if hasattr(self, 'cf_entry'):
             self.cf_entry.config(fg=entry_color)
         if online:
-            tunnel_url = self._config.get("tunnel_url", "")
-        if tunnel_url:
-            self._log(f"Cloudflared: {tunnel_url}", "SUCCESS")
+            if self._cf_tunnel_url:
+                self._log(f"Cloudflared: {self._cf_tunnel_url}", "SUCCESS")
+            else:
+                self._log("Cloudflared tunnel connected", "SUCCESS")
 
     def _start_cloudflared(self):
         def run():
@@ -665,7 +706,7 @@ class PanelControls:
         threading.Thread(target=run, daemon=True).start()
 
     def _read_cloudflared_logs(self):
-        import re as _re
+        url_pattern = _re.compile(r'https://[a-zA-Z0-9.-]+\.(?:trycloudflare|cfargotunnel)\.com\S*')
         try:
             for line in self.cloudflared_process.stdout:
                 line = line.rstrip()
@@ -673,10 +714,15 @@ class PanelControls:
                     continue
                 clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
                 clean = _re.sub(r'\x1b\]([0-9]+);.*?\x07', '', clean)
-                # 检测连接成功 → 更新状态指示灯
+                # 尝试从日志中提取 quick tunnel URL
+                url_match = url_pattern.search(clean)
+                if url_match and not self._cf_tunnel_url:
+                    self._cf_tunnel_url = url_match.group(0)
+                # 检测连接成功 → 加载 URL + 更新状态
                 if "Registered tunnel connection" in clean:
+                    self.root.after(0, lambda: self._load_cf_tunnel_url())
                     self.root.after(0, lambda: self._set_cf(True, "已连接"))
-                # 内容分级：异常行用 WARNING/ERROR，正常行用 CLOUDFLARE
+                # 内容分级
                 upper = clean.upper()
                 if " ERR " in upper or " ERROR " in upper or "FAILED" in upper:
                     lvl = "ERROR"

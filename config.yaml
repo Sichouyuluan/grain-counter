@@ -10,6 +10,7 @@ rate_limit_per_minute: 60
 require_api_key: true
 response_compress_min_size: 1000
 score_threshold: 0.25
+tunnel_url: ''
 upload_timeout_seconds: 120
 valuable_dir: Valuable photos
 valuable_enable: false
@@ -17,4 +18,3 @@ valuable_low_ratio: 0.2
 valuable_low_threshold: 0.5
 valuable_very_low_ratio: 0.08
 valuable_very_low_threshold: 0.3
-tunnel_url: ""
